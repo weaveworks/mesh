@@ -29,8 +29,6 @@ We will support multiple deployment scenarios, including
 
 ## Developing
 
-Requires Go 1.5+. Ensure `GO15VENDOREXPERIMENT=1` is set.
-
 ### Building
 
 `go build ./...`
@@ -41,9 +39,17 @@ Requires Go 1.5+. Ensure `GO15VENDOREXPERIMENT=1` is set.
 
 ### Dependencies
 
-Mesh vendors all dependencies into the vendor directory, in the style of GO15VENDOREXPERIMENT.
-You may use the tool of your choice to manage vendored dependencies.
-We recommend [gvt](https://github.com/filosottile/gvt), using the fetch, update, and delete subcommands.
+Mesh is a library, designed to be imported into a binary package. 
+Vendoring is currently the best way for binary package authors to ensure reliable, reproducible builds. 
+Therefore, we strongly recommend our users use vendoring for all of their dependencies, including Mesh. 
+To avoid compatibility and availability issues, Mesh doesn't vendor its own dependencies, and doesn't recommend use of third-party import proxies.
+
+There are several tools to make vendoring easier, including
+ [gb](https://getgb.io),
+ [gvt](https://github.com/filosottile/gvt), and
+ [glide](https://github.com/Masterminds/glide).
+Also, consider using the [GO15VENDOREXPERIMENT method](https://docs.google.com/document/d/1Bz5-UB7g2uPBdOx-rw5t9MxJwkfpx90cqG9AFL0JAYo/edit)
+ supported in Go 1.5 and set to become standard in Go 1.6.
 
 ### Workflow
 
