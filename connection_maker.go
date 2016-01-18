@@ -8,13 +8,23 @@ import (
 )
 
 const (
+	// InitialInterval is the lower bound on backoff between connection retries.
+	// TODO(pb): does this need to be exported?
 	InitialInterval = 2 * time.Second
-	MaxInterval     = 6 * time.Minute
-	ResetAfter      = 1 * time.Minute
+
+	// MaxInterval is the upper bound on backoff between connection retries.
+	// TODO(pb): does this need to be exported?
+	MaxInterval = 6 * time.Minute
+
+	// ResetAfter is the time after which a connection waiting for a retry is
+	// immediately retried.
+	// TODO(pb): does this need to be exported?
+	ResetAfter = 1 * time.Minute
 )
 
 type peerAddrs map[string]*net.TCPAddr
 
+// ConnectionMaker initiates and manages connections to peers.
 type ConnectionMaker struct {
 	ourself     *LocalPeer
 	peers       *Peers
@@ -26,15 +36,25 @@ type ConnectionMaker struct {
 	actionChan  chan<- ConnectionMakerAction
 }
 
+// TargetState describes the connection state of a remote target.
+// TODO(pb): does this need to be exported?
 type TargetState int
 
 const (
-	TargetWaiting    TargetState = iota // we are waiting to connect there
-	TargetAttempting                    // we are attempting to connect there
-	TargetConnected                     // we are connected to there
+	// TargetWaiting means we are waiting to connect there.
+	// TODO(pb): does this need to be exported?
+	TargetWaiting TargetState = iota
+
+	// TargetAttempting means we are attempting to connect there.
+	// TODO(pb): does this need to be exported?
+	TargetAttempting
+
+	// TargetConnected means we are connected to there.
+	// TODO(pb): does this need to be exported?
+	TargetConnected
 )
 
-// Information about an address where we may find a peer
+// Target contains information about an address where we may find a peer.
 type Target struct {
 	state       TargetState
 	lastError   error         // reason for disconnection last time
@@ -42,8 +62,15 @@ type Target struct {
 	tryInterval time.Duration // retry delay on next failure
 }
 
+// ConnectionMakerAction is the actor closure used by ConnectionMaker. If an
+// action returns true, the ConnectionMaker will check the state of its
+// targets, and reconnect to relevant candidates.
+// TODO(pb): does this need to be exported?
 type ConnectionMakerAction func() bool
 
+// NewConnectionMaker returns a usable ConnectionMaker, seeded with peers,
+// listening on port. If discovery is true, ConnectionMaker will attempt to
+// initiate new connections with peers it's not directly connected to.
 func NewConnectionMaker(ourself *LocalPeer, peers *Peers, port int, discovery bool) *ConnectionMaker {
 	actionChan := make(chan ConnectionMakerAction, ChannelSize)
 	cm := &ConnectionMaker{
@@ -54,11 +81,16 @@ func NewConnectionMaker(ourself *LocalPeer, peers *Peers, port int, discovery bo
 		directPeers: peerAddrs{},
 		targets:     make(map[string]*Target),
 		connections: make(map[Connection]struct{}),
-		actionChan:  actionChan}
+		actionChan:  actionChan,
+	}
 	go cm.queryLoop(actionChan)
 	return cm
 }
 
+// InitiateConnections creates new connections to the provided peers,
+// specified in host:port format. If replace is true, any existing direct
+// peers are forgotten.
+// TODO(pb): invoked only by Weave Net
 func (cm *ConnectionMaker) InitiateConnections(peers []string, replace bool) []error {
 	errors := []error{}
 	addrs := peerAddrs{}
@@ -90,6 +122,9 @@ func (cm *ConnectionMaker) InitiateConnections(peers []string, replace bool) []e
 	return errors
 }
 
+// ForgetConnections removes direct connections to the provided peers,
+// specified in host:port format.
+// TODO(pb): invoked only by Weave Net
 func (cm *ConnectionMaker) ForgetConnections(peers []string) {
 	cm.actionChan <- func() bool {
 		for _, peer := range peers {
@@ -99,6 +134,9 @@ func (cm *ConnectionMaker) ForgetConnections(peers []string) {
 	}
 }
 
+// ConnectionAborted marks the target identified by address as broken, and puts
+// it in the TargetWaiting state.
+// TODO(pb): does this need to be exported?
 func (cm *ConnectionMaker) ConnectionAborted(address string, err error) {
 	cm.actionChan <- func() bool {
 		target := cm.targets[address]
@@ -109,6 +147,10 @@ func (cm *ConnectionMaker) ConnectionAborted(address string, err error) {
 	}
 }
 
+// ConnectionCreated registers the passed connection, and marks the target
+// identified by conn.RemoteTCPAddr() as established, and puts it in the
+// TargetConnected state.
+// TODO(pb): does this need to be exported?
 func (cm *ConnectionMaker) ConnectionCreated(conn Connection) {
 	cm.actionChan <- func() bool {
 		cm.connections[conn] = void
@@ -120,6 +162,9 @@ func (cm *ConnectionMaker) ConnectionCreated(conn Connection) {
 	}
 }
 
+// ConnectionTerminated unregisters the passed connection, and marks the
+// target identified by conn.RemoteTCPAddr() as Waiting.
+// TODO(pb): does this need to be exported?
 func (cm *ConnectionMaker) ConnectionTerminated(conn Connection, err error) {
 	cm.actionChan <- func() bool {
 		delete(cm.connections, conn)
@@ -140,10 +185,15 @@ func (cm *ConnectionMaker) ConnectionTerminated(conn Connection, err error) {
 	}
 }
 
+// Refresh sends a no-op action into the ConnectionMaker, purely so that the
+// ConnectionMaker will check the state of its targets and reconnect to
+// relevant candidates.
+// TODO(pb): does this need to be exported?
 func (cm *ConnectionMaker) Refresh() {
 	cm.actionChan <- func() bool { return true }
 }
 
+// TODO(pb): probably don't need to paramaterize actionChan
 func (cm *ConnectionMaker) queryLoop(actionChan <-chan ConnectionMakerAction) {
 	timer := time.NewTimer(MaxDuration)
 	run := func() { timer.Reset(cm.checkStateAndAttemptConnections()) }

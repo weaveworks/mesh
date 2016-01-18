@@ -8,8 +8,7 @@ import (
 	"sync"
 )
 
-var void = struct{}{}
-
+// Peers collects all of the known peers in the mesh, including ourself.
 type Peers struct {
 	sync.RWMutex
 	ourself   *LocalPeer
@@ -17,13 +16,15 @@ type Peers struct {
 	byShortID map[PeerShortID]ShortIDPeers
 	onGC      []func(*Peer)
 
-	// Called when the mapping from short ids to peers changes
+	// Called when the mapping from short IDs to peers changes
 	onInvalidateShortIDs []func()
 }
 
+// ShortIDPeers is a short reference type used internally within Peers.
+// TODO(pb): unexport
 type ShortIDPeers struct {
-	// If we know about a single peer with the short id, this is
-	// that peer.  If there is a collision, this is the peer with
+	// If we know about a single peer with the short ID, this is
+	// that peer. If there is a collision, this is the peer with
 	// the lowest Name.
 	peer *Peer
 
@@ -31,8 +32,11 @@ type ShortIDPeers struct {
 	others []*Peer
 }
 
+// PeerNameSet is a set of PeerNames used internally throughout mesh.
+// TODO(pb): does this need to be exported?
 type PeerNameSet map[PeerName]struct{}
 
+// ConnectionSummary collects details about a connection.
 type ConnectionSummary struct {
 	NameByte      []byte
 	RemoteTCPAddr string
@@ -40,13 +44,14 @@ type ConnectionSummary struct {
 	Established   bool
 }
 
-// Pending notifications due to changes to Peers that need to be sent
-// out once the Peers is unlocked.
+// PeersPendingNotifications due to changes to Peers that need to be sent out
+// once the Peers is unlocked.
+// TODO(pb): unexport
 type PeersPendingNotifications struct {
 	// Peers that have been GCed
 	removed []*Peer
 
-	// The mapping from shorts ids to peers changed
+	// The mapping from short IDs to peers changed
 	invalidateShortIDs bool
 
 	// The local short ID needs reassigning due to a collision
@@ -56,6 +61,7 @@ type PeersPendingNotifications struct {
 	localPeerModified bool
 }
 
+// NewPeers constructs a new, empty Peers.
 func NewPeers(ourself *LocalPeer) *Peers {
 	peers := &Peers{
 		ourself:   ourself,
@@ -66,6 +72,8 @@ func NewPeers(ourself *LocalPeer) *Peers {
 	return peers
 }
 
+// OnGC adds a new function to be set of functions that will be executed on
+// all subsequent GC runs, receiving the GC'd peer.
 func (peers *Peers) OnGC(callback func(*Peer)) {
 	peers.Lock()
 	defer peers.Unlock()
@@ -77,6 +85,9 @@ func (peers *Peers) OnGC(callback func(*Peer)) {
 	peers.onGC = append(peers.onGC, callback)
 }
 
+// OnInvalidateShortIDs adds a new function to a set of functions that will be
+// executed on all subsequent GC runs, when the mapping from short IDs to
+// peers has changed.
 func (peers *Peers) OnInvalidateShortIDs(callback func()) {
 	peers.Lock()
 	defer peers.Unlock()
@@ -86,8 +97,7 @@ func (peers *Peers) OnInvalidateShortIDs(callback func()) {
 }
 
 func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
-	broadcastLocalPeer := (pending.reassignLocalShortID && peers.reassignLocalShortID(pending)) ||
-		pending.localPeerModified
+	broadcastLocalPeer := (pending.reassignLocalShortID && peers.reassignLocalShortID(pending)) || pending.localPeerModified
 	onGC := peers.onGC
 	onInvalidateShortIDs := peers.onInvalidateShortIDs
 	peers.Unlock()
@@ -132,7 +142,7 @@ func (peers *Peers) addByShortID(peer *Peer, pending *PeersPendingNotifications)
 
 		if entry.peer == peers.ourself.Peer {
 			// The bumped peer is peers.ourself, so we
-			// need to look for a new short id
+			// need to look for a new short ID.
 			pending.reassignLocalShortID = true
 		}
 
@@ -186,7 +196,7 @@ func (peers *Peers) deleteByShortID(peer *Peer, pending *PeersPendingNotificatio
 		entry.peer = entry.others[otherIndex]
 		pending.invalidateShortIDs = true
 	} else {
-		// This is the last peer with the short id.  We clear
+		// This is the last peer with the short ID. We clear
 		// the entry, don't delete it, in order to detect when
 		// it gets re-used.
 		peers.byShortID[peer.ShortID] = ShortIDPeers{}
@@ -215,11 +225,11 @@ func (peers *Peers) setLocalShortID(newShortID PeerShortID, pending *PeersPendin
 	peers.addByShortID(peers.ourself.Peer, pending)
 }
 
-// Choose an available short id at random
+// Choose an available short ID at random.
 func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	rng := rand.New(rand.NewSource(int64(randUint64())))
 
-	// First, just try picking some short ids at random, and
+	// First, just try picking some short IDs at random, and
 	// seeing if they are available:
 	for i := 0; i < 10; i++ {
 		shortID := PeerShortID(rng.Intn(1 << PeerShortIDBits))
@@ -228,7 +238,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 		}
 	}
 
-	// Looks like most short ids are used.  So count the number of
+	// Looks like most short IDs are used. So count the number of
 	// unused ones, and pick one at random.
 	available := int(1 << PeerShortIDBits)
 	for _, entry := range peers.byShortID {
@@ -238,7 +248,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	}
 
 	if available == 0 {
-		// All short ids are used.
+		// All short IDs are used.
 		return 0, false
 	}
 
@@ -257,6 +267,9 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	}
 }
 
+// FetchWithDefault will use reference fields of the passed peer object to
+// look up and return an existing, matching peer. If no matching peer is
+// found, the passed peer is saved and returned.
 func (peers *Peers) FetchWithDefault(peer *Peer) *Peer {
 	peers.Lock()
 	var pending PeersPendingNotifications
@@ -273,12 +286,16 @@ func (peers *Peers) FetchWithDefault(peer *Peer) *Peer {
 	return peer
 }
 
+// Fetch returns a peer matching the passed name, without incrementing its
+// refcount. If no matching peer is found, Fetch returns nil.
 func (peers *Peers) Fetch(name PeerName) *Peer {
 	peers.RLock()
 	defer peers.RUnlock()
 	return peers.byName[name]
 }
 
+// FetchAndAddRef returns a peer matching the passed name, and increments its
+// refcount. If no matching peer is found, FetchAndAddRef returns nil.
 func (peers *Peers) FetchAndAddRef(name PeerName) *Peer {
 	peers.Lock()
 	defer peers.Unlock()
@@ -289,18 +306,23 @@ func (peers *Peers) FetchAndAddRef(name PeerName) *Peer {
 	return peer
 }
 
+// FetchByShortID returns a peer matching the passed short ID.
+// If no matching peer is found, FetchByShortID returns nil.
 func (peers *Peers) FetchByShortID(shortID PeerShortID) *Peer {
 	peers.RLock()
 	defer peers.RUnlock()
 	return peers.byShortID[shortID].peer
 }
 
+// Dereference decrements the refcount of the matching peer.
+// TODO(pb): this is an awkward way to use the mutex; consider refactoring
 func (peers *Peers) Dereference(peer *Peer) {
 	peers.Lock()
 	defer peers.Unlock()
 	peer.localRefCount--
 }
 
+// ForEach applies fun to each peer under a read lock.
 func (peers *Peers) ForEach(fun func(*Peer)) {
 	peers.RLock()
 	defer peers.RUnlock()
@@ -309,7 +331,7 @@ func (peers *Peers) ForEach(fun func(*Peer)) {
 	}
 }
 
-// Merge an incoming update with our own topology.
+// ApplyUpdate merges an incoming update with our own topology.
 //
 // We add peers hitherto unknown to us, and update peers for which the
 // update contains a more recent version than known to us. The return
@@ -346,6 +368,7 @@ func (peers *Peers) ApplyUpdate(update []byte) (PeerNameSet, PeerNameSet, error)
 	return updateNames, newUpdate, nil
 }
 
+// Names allocates and returns a set of all peer names.
 func (peers *Peers) Names() PeerNameSet {
 	peers.RLock()
 	defer peers.RUnlock()
@@ -357,6 +380,7 @@ func (peers *Peers) Names() PeerNameSet {
 	return names
 }
 
+// EncodePeers returns a Gob-encoded set of known peers.
 func (peers *Peers) EncodePeers(names PeerNameSet) []byte {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
@@ -374,6 +398,8 @@ func (peers *Peers) EncodePeers(names PeerNameSet) []byte {
 	return buf.Bytes()
 }
 
+// GarbageCollect takes a lock, triggers a GC, and invokes the accumulated GC
+// callbacks.
 func (peers *Peers) GarbageCollect() {
 	peers.Lock()
 	var pending PeersPendingNotifications
@@ -396,7 +422,7 @@ func (peers *Peers) garbageCollect(pending *PeersPendingNotifications) {
 	}
 
 	if len(pending.removed) > 0 && peers.byShortID[peers.ourself.ShortID].peer != peers.ourself.Peer {
-		// The local peer doesn't own its short id.  Garbage
+		// The local peer doesn't own its short ID. Garbage
 		// collection might have freed some up, so try to
 		// reassign.
 		pending.reassignLocalShortID = true
@@ -486,6 +512,7 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 	return newUpdate
 }
 
+// Encode writes the peer to the encoder.
 func (peer *Peer) Encode(enc *gob.Encoder) {
 	checkFatal(enc.Encode(peer.PeerSummary))
 
@@ -500,12 +527,6 @@ func (peer *Peer) Encode(enc *gob.Encoder) {
 	}
 
 	checkFatal(enc.Encode(connSummaries))
-}
-
-func (peer *LocalPeer) Encode(enc *gob.Encoder) {
-	peer.RLock()
-	defer peer.RUnlock()
-	peer.Peer.Encode(enc)
 }
 
 func decodePeer(dec *gob.Decoder) (peerSummary PeerSummary, connSummaries []ConnectionSummary, err error) {

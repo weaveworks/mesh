@@ -4,6 +4,7 @@ import (
 	"net"
 )
 
+// Overlay yields OverlayConnections.
 type Overlay interface {
 	// Enhance a features map with overlay-related features
 	AddFeaturesTo(map[string]string)
@@ -16,6 +17,7 @@ type Overlay interface {
 	Diagnostics() interface{}
 }
 
+// OverlayConnectionParams are used to set up overlay connections.
 type OverlayConnectionParams struct {
 	RemotePeer *Peer
 
@@ -53,64 +55,65 @@ type OverlayConnectionParams struct {
 	Features map[string]string
 }
 
-// All of the machinery to manage overlay connectivity to a particular
-// peer
+// OverlayConnection describes all of the machinery to manage overlay
+// connectivity to a particular peer.
 type OverlayConnection interface {
 	// Confirm that the connection is really wanted, and so the
 	// Overlay should begin heartbeats etc. to verify the operation of
 	// the overlay connection.
 	Confirm()
 
-	// A channel indicating that the overlay connection is
-	// established, i.e. its operation has been confirmed.
+	// EstablishedChannel returns a channel that will be closed when the
+	// overlay connection is established, i.e. its operation has been
+	// confirmed.
 	EstablishedChannel() <-chan struct{}
 
-	// A channel indicating an error from the overlay connection.  The
-	// overlay connection is not expected to be operational after the
-	// first error, so the channel only needs to buffer a single
+	// ErrorChannel returns a channel that forwards errors from the overlay
+	// connection. The overlay connection is not expected to be operational
+	// after the first error, so the channel only needs to buffer a single
 	// error.
 	ErrorChannel() <-chan error
 
+	// Stop terminates the connection.
 	Stop()
 
-	// Handle a message from the peer.  'tag' exists for
-	// compatibility, and should always be
-	// ProtocolOverlayControlMessage for non-sleeve overlays.
+	// ControlMessage handles a message from the remote peer. 'tag' exists for
+	// compatibility, and should always be ProtocolOverlayControlMessage for
+	// non-sleeve overlays.
 	ControlMessage(tag byte, msg []byte)
 
-	// User facing overlay name
+	// DisplayName returns the user-facing overlay name.
 	DisplayName() string
 }
 
+// NullOverlay implements Overlay and OverlayConnection with no-ops.
 type NullOverlay struct{}
 
-func (NullOverlay) AddFeaturesTo(map[string]string) {
-}
+// AddFeaturesTo implements Overlay.
+func (NullOverlay) AddFeaturesTo(map[string]string) {}
 
+// PrepareConnection implements Overlay.
 func (NullOverlay) PrepareConnection(OverlayConnectionParams) (OverlayConnection, error) {
 	return NullOverlay{}, nil
 }
 
-func (NullOverlay) Diagnostics() interface{} {
-	return nil
-}
-func (NullOverlay) Confirm() {
-}
+// Diagnostics implements Overlay.
+func (NullOverlay) Diagnostics() interface{} { return nil }
 
-func (NullOverlay) EstablishedChannel() <-chan struct{} {
-	return nil
-}
+// Confirm implements OverlayConnection.
+func (NullOverlay) Confirm() {}
 
-func (NullOverlay) ErrorChannel() <-chan error {
-	return nil
-}
+// EstablishedChannel implements OverlayConnection.
+func (NullOverlay) EstablishedChannel() <-chan struct{} { return nil }
 
-func (NullOverlay) Stop() {
-}
+// ErrorChannel implements OverlayConnection.
+func (NullOverlay) ErrorChannel() <-chan error { return nil }
 
-func (NullOverlay) ControlMessage(byte, []byte) {
-}
+// Stop implements OverlayConnection.
+func (NullOverlay) Stop() {}
 
-func (NullOverlay) DisplayName() string {
-	return "null"
-}
+// ControlMessage implements OverlayConnection.
+func (NullOverlay) ControlMessage(byte, []byte) {}
+
+// DisplayName implements OverlayConnection.
+func (NullOverlay) DisplayName() string { return "null" }

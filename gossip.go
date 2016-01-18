@@ -5,33 +5,58 @@ import (
 	"sync"
 )
 
-type GossipData interface {
-	Encode() [][]byte
-	Merge(GossipData) GossipData
-}
-
+// Gossip is the sending interface.
+// TODO(pb): rename to e.g. Sender
 type Gossip interface {
-	// specific message from one peer to another
-	// intermediate peers relay it using unicast topology.
-	GossipUnicast(dstPeerName PeerName, msg []byte) error
-	// send gossip to every peer, relayed using broadcast topology.
+	// GossipUnicast emits a single message to a peer in the mesh.
+	// TODO(pb): rename to Unicast?
+	//
+	// Unicast takes []byte instead of GossipData because "to date there has
+	// been no compelling reason [in practice] to do merging on unicast."
+	// But there may be some motivation to have unicast Mergeable; see
+	// https://github.com/weaveworks/weave/issues/1764
+	// TODO(pb): for uniformity of interface, rather take GossipData?
+	GossipUnicast(dst PeerName, msg []byte) error
+
+	// GossipBroadcast emits a message to all peers in the mesh.
+	// TODO(pb): rename to Broadcast?
 	GossipBroadcast(update GossipData) error
 }
 
+// Gossiper is the receiving interface.
+// TODO(pb): rename to e.g. Receiver
 type Gossiper interface {
-	OnGossipUnicast(sender PeerName, msg []byte) error
-	// merge received data into state and return a representation of
-	// the received data, for further propagation
-	OnGossipBroadcast(sender PeerName, update []byte) (GossipData, error)
-	// return state of everything we know; gets called periodically
+	// OnGossipUnicast merges received data into state.
+	// TODO(pb): rename to e.g. OnUnicast
+	OnGossipUnicast(src PeerName, msg []byte) error
+
+	// OnGossipBroadcast merges received data into state and returns a
+	// representation of the received data, for further propagation.
+	// TODO(pb): rename to e.g. OnBroadcast
+	OnGossipBroadcast(src PeerName, update []byte) (GossipData, error)
+
+	// Gossip returns the state of everything we know; gets called periodically.
 	Gossip() GossipData
-	// merge received data into state and return "everything new I've
-	// just learnt", or nil if nothing in the received data was new
-	OnGossip(update []byte) (GossipData, error)
+
+	// OnGossip merges received data into state and returns "everything new
+	// I've just learnt", or nil if nothing in the received data was new.
+	OnGossip(msg []byte) (GossipData, error)
 }
 
-// Accumulates GossipData that needs to be sent to one destination,
-// and sends it when possible.
+// GossipData is a merge-able dataset.
+// Think: log-structured data.
+type GossipData interface {
+	// Encode encodes the data into multiple byte-slices.
+	Encode() [][]byte
+
+	// Merge combines another GossipData into this one and returns the result.
+	// TODO(pb): does it need to be leave the original unmodified?
+	Merge(GossipData) GossipData
+}
+
+// GossipSender accumulates GossipData that needs to be sent to one
+// destination, and sends it when possible. GossipSender is one-to-one with a
+// channel.
 type GossipSender struct {
 	sync.Mutex
 	makeMsg          func(msg []byte) ProtocolMsg
@@ -43,7 +68,13 @@ type GossipSender struct {
 	flush            chan<- chan<- bool // for testing
 }
 
-func NewGossipSender(makeMsg func(msg []byte) ProtocolMsg, makeBroadcastMsg func(srcName PeerName, msg []byte) ProtocolMsg, sender ProtocolSender, stop <-chan struct{}) *GossipSender {
+// NewGossipSender constructs a usable GossipSender.
+func NewGossipSender(
+	makeMsg func(msg []byte) ProtocolMsg,
+	makeBroadcastMsg func(srcName PeerName, msg []byte) ProtocolMsg,
+	sender ProtocolSender,
+	stop <-chan struct{},
+) *GossipSender {
 	more := make(chan struct{}, 1)
 	flush := make(chan chan<- bool)
 	s := &GossipSender{
@@ -57,6 +88,7 @@ func NewGossipSender(makeMsg func(msg []byte) ProtocolMsg, makeBroadcastMsg func
 	return s
 }
 
+// TODO(pb): no need to parameterize more and flush
 func (s *GossipSender) run(stop <-chan struct{}, more <-chan struct{}, flush <-chan chan<- bool) {
 	sent := false
 	for {
@@ -131,6 +163,8 @@ func (s *GossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte)
 	return
 }
 
+// Send accumulates the GossipData and will send it eventually.
+// Send and Broadcast accumulate into different buckets.
 func (s *GossipSender) Send(data GossipData) {
 	s.Lock()
 	defer s.Unlock()
@@ -144,6 +178,8 @@ func (s *GossipSender) Send(data GossipData) {
 	}
 }
 
+// Broadcast accumulates the GossipData under the given srcName and will send
+// it eventually. Send and Broadcast accumulate into different buckets.
 func (s *GossipSender) Broadcast(srcName PeerName, data GossipData) {
 	s.Lock()
 	defer s.Unlock()
@@ -167,13 +203,17 @@ func (s *GossipSender) prod() {
 	}
 }
 
-// for testing
+// Flush sends all pending data, and returns true if anything was sent since
+// the previous flush. For testing.
 func (s *GossipSender) Flush() bool {
 	ch := make(chan bool)
 	s.flush <- ch
 	return <-ch
 }
 
+// GossipSenders wraps a ProtocolSender (e.g. a LocalConnection) and yields
+// per-channel GossipSenders.
+// TODO(pb): may be able to remove this and use makeGossipSender directly
 type GossipSenders struct {
 	sync.Mutex
 	sender  ProtocolSender
@@ -181,10 +221,14 @@ type GossipSenders struct {
 	senders map[string]*GossipSender
 }
 
+// NewGossipSenders returns a usable GossipSenders leveraging the ProtocolSender.
+// TODO(pb): is stop chan the best way to do that?
 func NewGossipSenders(sender ProtocolSender, stop <-chan struct{}) *GossipSenders {
 	return &GossipSenders{sender: sender, stop: stop, senders: make(map[string]*GossipSender)}
 }
 
+// Sender yields the GossipSender for the named channel.
+// It will use the factory function if no sender yet exists.
 func (gs *GossipSenders) Sender(channelName string, makeGossipSender func(sender ProtocolSender, stop <-chan struct{}) *GossipSender) *GossipSender {
 	gs.Lock()
 	defer gs.Unlock()
@@ -196,7 +240,7 @@ func (gs *GossipSenders) Sender(channelName string, makeGossipSender func(sender
 	return s
 }
 
-// for testing
+// Flush flushes all managed senders. Used for testing.
 func (gs *GossipSenders) Flush() bool {
 	sent := false
 	gs.Lock()
@@ -207,8 +251,13 @@ func (gs *GossipSenders) Flush() bool {
 	return sent
 }
 
+// GossipChannels is an index of channel name to gossip channel.
+// TODO(pb): does this need to be exported?
 type GossipChannels map[string]*GossipChannel
 
+// NewGossip constructs and returns a usable GossipChannel from the router.
+// TODO(pb): rename?
+// TODO(pb): move all of these methods to router.go
 func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
 	channel := NewGossipChannel(channelName, router.Ourself, router.Routes, g)
 	router.gossipLock.Lock()
@@ -248,6 +297,8 @@ func (router *Router) gossipChannelSet() map[*GossipChannel]struct{} {
 	return channels
 }
 
+// SendAllGossip relays all pending gossip data for each channel via random
+// neighbours.
 func (router *Router) SendAllGossip() {
 	for channel := range router.gossipChannelSet() {
 		if gossip := channel.gossiper.Gossip(); gossip != nil {
@@ -256,6 +307,7 @@ func (router *Router) SendAllGossip() {
 	}
 }
 
+// SendAllGossipDown relays all pending gossip data for each channel via conn.
 func (router *Router) SendAllGossipDown(conn Connection) {
 	for channel := range router.gossipChannelSet() {
 		if gossip := channel.gossiper.Gossip(); gossip != nil {
@@ -265,7 +317,6 @@ func (router *Router) SendAllGossipDown(conn Connection) {
 }
 
 // for testing
-
 func (router *Router) sendPendingGossip() bool {
 	sentSomething := false
 	for conn := range router.Ourself.Connections() {

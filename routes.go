@@ -8,6 +8,7 @@ import (
 type unicastRoutes map[PeerName]PeerName
 type broadcastRoutes map[PeerName][]PeerName
 
+// Routes aggregates unicast and broadcast routes for our peer.
 type Routes struct {
 	sync.RWMutex
 	ourself      *LocalPeer
@@ -24,6 +25,7 @@ type Routes struct {
 	// symmetric ones
 }
 
+// NewRoutes returns a usable Routes based on the LocalPeer and existing Peers.
 func NewRoutes(ourself *LocalPeer, peers *Peers) *Routes {
 	recalculate := make(chan *struct{}, 1)
 	wait := make(chan chan struct{})
@@ -31,31 +33,33 @@ func NewRoutes(ourself *LocalPeer, peers *Peers) *Routes {
 	routes := &Routes{
 		ourself:      ourself,
 		peers:        peers,
-		unicast:      make(unicastRoutes),
-		unicastAll:   make(unicastRoutes),
-		broadcast:    make(broadcastRoutes),
-		broadcastAll: make(broadcastRoutes),
+		unicast:      unicastRoutes{ourself.Name: UnknownPeerName},
+		unicastAll:   unicastRoutes{ourself.Name: UnknownPeerName},
+		broadcast:    broadcastRoutes{ourself.Name: []PeerName{}},
+		broadcastAll: broadcastRoutes{ourself.Name: []PeerName{}},
 		recalculate:  recalculate,
 		wait:         wait,
-		action:       action}
-	routes.unicast[ourself.Name] = UnknownPeerName
-	routes.unicastAll[ourself.Name] = UnknownPeerName
-	routes.broadcast[ourself.Name] = []PeerName{}
-	routes.broadcastAll[ourself.Name] = []PeerName{}
+		action:       action,
+	}
 	go routes.run(recalculate, wait, action)
 	return routes
 }
 
+// OnChange appends callback to the functions that will be called whenever the
+// routes are recalculated.
 func (routes *Routes) OnChange(callback func()) {
 	routes.Lock()
 	defer routes.Unlock()
 	routes.onChange = append(routes.onChange, callback)
 }
 
+// PeerNames returns the peers that are accountd for in the routes.
 func (routes *Routes) PeerNames() PeerNameSet {
 	return routes.peers.Names()
 }
 
+// Unicast returns the next hop on the unicast route to the named peer,
+// based on established and symmetric connections.
 func (routes *Routes) Unicast(name PeerName) (PeerName, bool) {
 	routes.RLock()
 	defer routes.RUnlock()
@@ -63,6 +67,8 @@ func (routes *Routes) Unicast(name PeerName) (PeerName, bool) {
 	return hop, found
 }
 
+// UnicastAll returns the next hop on the unicast route to the named peer,
+// based on all connections.
 func (routes *Routes) UnicastAll(name PeerName) (PeerName, bool) {
 	routes.RLock()
 	defer routes.RUnlock()
@@ -70,10 +76,16 @@ func (routes *Routes) UnicastAll(name PeerName) (PeerName, bool) {
 	return hop, found
 }
 
+// Broadcast returns the set of peer names that should be notified
+// when we receive a broadcast message originating from the named peer
+// based on established and symmetric connections.
 func (routes *Routes) Broadcast(name PeerName) []PeerName {
 	return routes.lookupOrCalculate(name, &routes.broadcast, true)
 }
 
+// BroadcastAll returns the set of peer names that should be notified
+// when we receive a broadcast message originating from the named peer
+// based on all connections.
 func (routes *Routes) BroadcastAll(name PeerName) []PeerName {
 	return routes.lookupOrCalculate(name, &routes.broadcastAll, false)
 }
@@ -107,19 +119,18 @@ func (routes *Routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoute
 	return <-res
 }
 
-// Choose min(log2(n_peers), n_neighbouring_peers) neighbours, with a
-// random distribution that is topology-sensitive, favouring
-// neighbours at the end of "bottleneck links". We determine the
-// latter based on the unicast routing table. If a neighbour appears
-// as the value more frequently than others - meaning that we reach a
-// higher proportion of peers via that neighbour than other neighbours
-// - then it is chosen with a higher probability.
+// RandomNeighbours chooses min(log2(n_peers), n_neighbouring_peers)
+// neighbours, with a random distribution that is topology-sensitive,
+// favouring neighbours at the end of "bottleneck links". We determine the
+// latter based on the unicast routing table. If a neighbour appears as the
+// value more frequently than others - meaning that we reach a higher
+// proportion of peers via that neighbour than other neighbours - then it is
+// chosen with a higher probability.
 //
-// Note that we choose log2(n_peers) *neighbours*, not
-// peers. Consequently, on sparsely connected peers this function
-// returns a higher proportion of neighbours than elsewhere. In
-// extremis, on peers with fewer than log2(n_peers) neighbours, all
-// neighbours are returned.
+// Note that we choose log2(n_peers) *neighbours*, not peers. Consequently, on
+// sparsely connected peers this function returns a higher proportion of
+// neighbours than elsewhere. In extremis, on peers with fewer than
+// log2(n_peers) neighbours, all neighbours are returned.
 func (routes *Routes) RandomNeighbours(except PeerName) []PeerName {
 	destinations := make(PeerNameSet)
 	routes.RLock()
@@ -141,8 +152,8 @@ func (routes *Routes) RandomNeighbours(except PeerName) []PeerName {
 	return res
 }
 
-// Request recalculation of the routing table. This is async but can
-// effectively be made synchronous with a subsequent call to
+// Recalculate requests recalculation of the routing table. This is async but
+// can effectively be made synchronous with a subsequent call to
 // EnsureRecalculated.
 func (routes *Routes) Recalculate() {
 	// The use of a 1-capacity channel in combination with the
@@ -154,7 +165,7 @@ func (routes *Routes) Recalculate() {
 	}
 }
 
-// Wait for any preceding Recalculate requests to be processed.
+// EnsureRecalculated waits for any preceding Recalculate requests to finish.
 func (routes *Routes) EnsureRecalculated() {
 	done := make(chan struct{})
 	routes.wait <- done

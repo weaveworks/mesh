@@ -8,49 +8,16 @@ import (
 	"strconv"
 )
 
-func randBytes(n int) []byte {
-	buf := make([]byte, n)
-	_, err := rand.Read(buf)
-	checkFatal(err)
-	return buf
+// Peer is a local representation of a peer, including connections to other
+// peers. By itself, it is a remote peer.
+type Peer struct {
+	Name PeerName
+	PeerSummary
+	localRefCount uint64 // maintained by Peers
+	connections   map[PeerName]Connection
 }
 
-func randUint64() (r uint64) {
-	return binary.LittleEndian.Uint64(randBytes(8))
-}
-
-func randUint16() (r uint16) {
-	return binary.LittleEndian.Uint16(randBytes(2))
-}
-
-type PeerUID uint64
-
-func randomPeerUID() PeerUID {
-	for {
-		uid := randUint64()
-		if uid != 0 { // uid 0 is reserved for peer placeholder
-			return PeerUID(uid)
-		}
-	}
-}
-
-func ParsePeerUID(s string) (PeerUID, error) {
-	uid, err := strconv.ParseUint(s, 10, 64)
-	return PeerUID(uid), err
-}
-
-// Short IDs exist for the sake of fast datapath.  They are 12 bits,
-// randomly assigned, but we detect and recover from collisions.  This
-// does limit us to 4096 peers, but that should be sufficient for a
-// while.
-type PeerShortID uint16
-
-const PeerShortIDBits = 12
-
-func randomPeerShortID() PeerShortID {
-	return PeerShortID(randUint16() & (1<<PeerShortIDBits - 1))
-}
-
+// PeerSummary is a collection of identifying information for a peer.
 type PeerSummary struct {
 	NameByte   []byte
 	NickName   string
@@ -60,27 +27,11 @@ type PeerSummary struct {
 	HasShortID bool
 }
 
-type Peer struct {
-	Name PeerName
-	PeerSummary
-	localRefCount uint64 // maintained by Peers
-	connections   map[PeerName]Connection
-}
-
-type ListOfPeers []*Peer
-
-func (lop ListOfPeers) Len() int {
-	return len(lop)
-}
-func (lop ListOfPeers) Swap(i, j int) {
-	lop[i], lop[j] = lop[j], lop[i]
-}
-func (lop ListOfPeers) Less(i, j int) bool {
-	return lop[i].Name < lop[j].Name
-}
-
+// ConnectionSet is an set of connection objects.
 type ConnectionSet map[Connection]struct{}
 
+// NewPeerFromSummary constructs a new Peer object with no connections from
+// the provided summary.
 func NewPeerFromSummary(summary PeerSummary) *Peer {
 	return &Peer{
 		Name:        PeerNameFromBin(summary.NameByte),
@@ -89,6 +40,8 @@ func NewPeerFromSummary(summary PeerSummary) *Peer {
 	}
 }
 
+// NewPeer constructs a new Peer object with no connections from the provided
+// composite parts.
 func NewPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortID PeerShortID) *Peer {
 	return NewPeerFromSummary(PeerSummary{
 		NameByte:   name.Bin(),
@@ -100,41 +53,44 @@ func NewPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortI
 	})
 }
 
+// NewPeerPlaceholder constructs a partial Peer object with only the passed
+// name. Useful when we get a strange update from the mesh.
 func NewPeerPlaceholder(name PeerName) *Peer {
 	return NewPeerFromSummary(PeerSummary{NameByte: name.Bin()})
 }
 
+// NewPeerFrom constructs a new Peer object that is a copy of the passed peer.
+// Primarily used for tests.
 func NewPeerFrom(peer *Peer) *Peer {
 	return NewPeerFromSummary(peer.PeerSummary)
 }
 
+// String returns the peer name and nickname.
 func (peer *Peer) String() string {
 	return fmt.Sprint(peer.Name, "(", peer.NickName, ")")
 }
 
-// Calculate the routing table from this peer to all peers reachable
-// from it, returning a "next hop" map of PeerNameX -> PeerNameY,
-// which says "in order to send a message to X, the peer should send
-// the message to its neighbour Y".
+// Routes calculates the routing table from this peer to all peers reachable
+// from it, returning a "next hop" map of PeerNameX -> PeerNameY, which says
+// "in order to send a message to X, the peer should send the message to its
+// neighbour Y".
 //
-// Because currently we do not have weightings on the connections
-// between peers, there is no need to use a minimum spanning tree
-// algorithm. Instead we employ the simpler and cheaper breadth-first
-// widening. The computation is deterministic, which ensures that when
-// it is performed on the same data by different peers, they get the
-// same result. This is important since otherwise we risk message loss
-// or routing cycles.
+// Because currently we do not have weightings on the connections between
+// peers, there is no need to use a minimum spanning tree algorithm. Instead
+// we employ the simpler and cheaper breadth-first widening. The computation
+// is deterministic, which ensures that when it is performed on the same data
+// by different peers, they get the same result. This is important since
+// otherwise we risk message loss or routing cycles.
 //
-// When the 'establishedAndSymmetric' flag is set, only connections
-// that are marked as 'established' and are symmetric (i.e. where both
-// sides indicate they have a connection to the other) are considered.
+// When the 'establishedAndSymmetric' flag is set, only connections that are
+// marked as 'established' and are symmetric (i.e. where both sides indicate
+// they have a connection to the other) are considered.
 //
-// When a non-nil stopAt peer is supplied, the widening stops when it
-// reaches that peer. The boolean return indicates whether that has
-// happened.
+// When a non-nil stopAt peer is supplied, the widening stops when it reaches
+// that peer. The boolean return indicates whether that has happened.
 //
-// NB: This function should generally be invoked while holding a read
-// lock on Peers and LocalPeer.
+// NB: This function should generally be invoked while holding a read lock on
+// Peers and LocalPeer.
 func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
 	routes := make(unicastRoutes)
 	routes[peer.Name] = UnknownPeerName
@@ -166,6 +122,11 @@ func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 	return false, routes
 }
 
+// ForEachConnectedPeer applies f to all peers reachable by peer. If
+// establishedAndSymmetric is true, only peers with established bidirectional
+// connections will be selected. The exclude maps is treated as a set of
+// remote peers to blacklist.
+// TODO(pb): change exclude to map[PeerName]struct{}?
 func (peer *Peer) ForEachConnectedPeer(establishedAndSymmetric bool, exclude map[PeerName]PeerName, f func(*Peer)) {
 	for remoteName, conn := range peer.connections {
 		if establishedAndSymmetric && !conn.Established() {
@@ -179,4 +140,71 @@ func (peer *Peer) ForEachConnectedPeer(establishedAndSymmetric bool, exclude map
 			f(remotePeer)
 		}
 	}
+}
+
+// PeerUID uniquely identifies a peer in a mesh.
+type PeerUID uint64
+
+// ParsePeerUID parses a decimal peer UID from a string.
+func ParsePeerUID(s string) (PeerUID, error) {
+	uid, err := strconv.ParseUint(s, 10, 64)
+	return PeerUID(uid), err
+}
+
+func randomPeerUID() PeerUID {
+	for {
+		uid := randUint64()
+		if uid != 0 { // uid 0 is reserved for peer placeholder
+			return PeerUID(uid)
+		}
+	}
+}
+
+// PeerShortID exists for the sake of fast datapath. They are 12 bits,
+// randomly assigned, but we detect and recover from collisions. This
+// does limit us to 4096 peers, but that should be sufficient for a
+// while.
+// TODO(pb): does this need to be exported?
+type PeerShortID uint16
+
+// PeerShortIDBits is the usable bitsize of a PeerShortID.
+// TODO(pb): does this need to be exported?
+const PeerShortIDBits = 12
+
+func randomPeerShortID() PeerShortID {
+	return PeerShortID(randUint16() & (1<<PeerShortIDBits - 1))
+}
+
+func randBytes(n int) []byte {
+	buf := make([]byte, n)
+	_, err := rand.Read(buf)
+	checkFatal(err)
+	return buf
+}
+
+func randUint64() (r uint64) {
+	return binary.LittleEndian.Uint64(randBytes(8))
+}
+
+func randUint16() (r uint16) {
+	return binary.LittleEndian.Uint16(randBytes(2))
+}
+
+// ListOfPeers implements sort.Interface on a slice of Peers.
+// TODO(pb): does this need to be exported?
+type ListOfPeers []*Peer
+
+// Len implements sort.Interface.
+func (lop ListOfPeers) Len() int {
+	return len(lop)
+}
+
+// Swap implements sort.Interface.
+func (lop ListOfPeers) Swap(i, j int) {
+	lop[i], lop[j] = lop[j], lop[i]
+}
+
+// Less implements sort.Interface.
+func (lop ListOfPeers) Less(i, j int) bool {
+	return lop[i].Name < lop[j].Name
 }

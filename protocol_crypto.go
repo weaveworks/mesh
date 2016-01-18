@@ -13,12 +13,20 @@ import (
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
+// MaxTCPMsgSize is the hard limit on sends and receives. Larger messages will
+// result in errors. This applies to the LengthPrefixTCP{Sender,Receiver} i.e.
+// V2 of the protocol.
+// TODO(pb): unexport
 const MaxTCPMsgSize = 10 * 1024 * 1024
 
+// GenerateKeyPair is used during encrypted protocol introduction.
+// TODO(pb): unexport
 func GenerateKeyPair() (publicKey, privateKey *[32]byte, err error) {
 	return box.GenerateKey(rand.Reader)
 }
 
+// FormSessionKey is used during encrypted protocol introduction.
+// TODO(pb): unexport
 func FormSessionKey(remotePublicKey, localPrivateKey *[32]byte, secretKey []byte) *[32]byte {
 	var sharedKey [32]byte
 	box.Precompute(&sharedKey, remotePublicKey, localPrivateKey)
@@ -30,14 +38,15 @@ func FormSessionKey(remotePublicKey, localPrivateKey *[32]byte, secretKey []byte
 
 // TCP Senders/Receivers
 
-// The lowest 64 bits of the nonce contain the message sequence
-// number. The top most bit indicates the connection polarity at the
-// sender - '1' for outbound; the next indicates protocol type - '1'
-// for TCP. The remaining 126 bits are zero. The polarity is needed so
-// that the two ends of a connection do not use the same nonces; the
-// protocol type so that the TCP connection nonces are distinct from
-// nonces used by overlay connections, if they share the session key.
-// This is a requirement of the NaCl Security Model; see
+// TCPCryptoState stores session key, nonce, and sequence state.
+//
+// The lowest 64 bits of the nonce contain the message sequence number. The
+// top most bit indicates the connection polarity at the sender - '1' for
+// outbound; the next indicates protocol type - '1' for TCP. The remaining 126
+// bits are zero. The polarity is needed so that the two ends of a connection
+// do not use the same nonces; the protocol type so that the TCP connection
+// nonces are distinct from nonces used by overlay connections, if they share
+// the session key. This is a requirement of the NaCl Security Model; see
 // http://nacl.cr.yp.to/box.html.
 type TCPCryptoState struct {
 	sessionKey *[32]byte
@@ -45,6 +54,7 @@ type TCPCryptoState struct {
 	seqNo      uint64
 }
 
+// NewTCPCryptoState returns a valid TCPCryptoState.
 func NewTCPCryptoState(sessionKey *[32]byte, outbound bool) *TCPCryptoState {
 	s := &TCPCryptoState{sessionKey: sessionKey}
 	if outbound {
@@ -59,36 +69,42 @@ func (s *TCPCryptoState) advance() {
 	binary.BigEndian.PutUint64(s.nonce[16:24], s.seqNo)
 }
 
+// TCPSender describes anything that can send byte buffers.
+// It abstracts over the different protocol version senders.
+// TODO(pb): does this need to be exported?
 type TCPSender interface {
 	Send([]byte) error
 }
 
+// GobTCPSender implements TCPSender and is used in the V1 protocol.
+// TODO(pb): unexport
 type GobTCPSender struct {
 	encoder *gob.Encoder
 }
 
-type LengthPrefixTCPSender struct {
-	writer io.Writer
-}
-
-type EncryptedTCPSender struct {
-	sync.RWMutex
-	sender TCPSender
-	state  *TCPCryptoState
-}
-
+// NewGobTCPSender returns a usable GobTCPSender.
 func NewGobTCPSender(encoder *gob.Encoder) *GobTCPSender {
 	return &GobTCPSender{encoder: encoder}
 }
 
+// Send implements TCPSender by encoding the msg.
 func (sender *GobTCPSender) Send(msg []byte) error {
 	return sender.encoder.Encode(msg)
 }
 
+// LengthPrefixTCPSender implements TCPSender and is used in the V2 protocol.
+// TODO(pb): unexport
+type LengthPrefixTCPSender struct {
+	writer io.Writer
+}
+
+// NewLengthPrefixTCPSender returns a usable LengthPrefixTCPSender.
 func NewLengthPrefixTCPSender(writer io.Writer) *LengthPrefixTCPSender {
 	return &LengthPrefixTCPSender{writer: writer}
 }
 
+// Send implements TCPSender by writing the size of the msg as a big-endian
+// uint32 before the msg. msgs larger than MaxTCPMsgSize are rejected.
 func (sender *LengthPrefixTCPSender) Send(msg []byte) error {
 	l := len(msg)
 	if l > MaxTCPMsgSize {
@@ -103,10 +119,20 @@ func (sender *LengthPrefixTCPSender) Send(msg []byte) error {
 	return err
 }
 
+// EncryptedTCPSender implements TCPSender by wrapping an existing TCPSender
+// with TCPCryptoState.
+type EncryptedTCPSender struct {
+	sync.RWMutex
+	sender TCPSender
+	state  *TCPCryptoState
+}
+
+// NewEncryptedTCPSender returns a usable EncryptedTCPSender.
 func NewEncryptedTCPSender(sender TCPSender, sessionKey *[32]byte, outbound bool) *EncryptedTCPSender {
 	return &EncryptedTCPSender{sender: sender, state: NewTCPCryptoState(sessionKey, outbound)}
 }
 
+// Send implements TCPSender by sealing and sending the as-is.
 func (sender *EncryptedTCPSender) Send(msg []byte) error {
 	sender.Lock()
 	defer sender.Unlock()
@@ -115,37 +141,46 @@ func (sender *EncryptedTCPSender) Send(msg []byte) error {
 	return sender.sender.Send(encodedMsg)
 }
 
+// TCPReceiver describes anything that can receive byte buffers.
+// It abstracts over the different protocol version receivers.
+// TODO(pb): does this need to be exported?
 type TCPReceiver interface {
 	Receive() ([]byte, error)
 }
 
+// GobTCPReceiver implements TCPReceiver and is used in the V1 protocol.
+// TODO(pb): unexport
 type GobTCPReceiver struct {
 	decoder *gob.Decoder
 }
 
-type LengthPrefixTCPReceiver struct {
-	reader io.Reader
-}
-
-type EncryptedTCPReceiver struct {
-	receiver TCPReceiver
-	state    *TCPCryptoState
-}
-
+// NewGobTCPReceiver returns a usable GobTCPReceiver.
+// TODO(pb): unexport
 func NewGobTCPReceiver(decoder *gob.Decoder) *GobTCPReceiver {
 	return &GobTCPReceiver{decoder: decoder}
 }
 
+// Receive implements TCPReciever by Gob decoding into a byte slice directly.
 func (receiver *GobTCPReceiver) Receive() ([]byte, error) {
 	var msg []byte
 	err := receiver.decoder.Decode(&msg)
 	return msg, err
 }
 
+// LengthPrefixTCPReceiver implements TCPReceiver, used in the V2 protocol.
+// TODO(pb): unexport
+type LengthPrefixTCPReceiver struct {
+	reader io.Reader
+}
+
+// NewLengthPrefixTCPReceiver returns a usable LengthPrefixTCPReceiver,
+// wrapping the passed reader.
 func NewLengthPrefixTCPReceiver(reader io.Reader) *LengthPrefixTCPReceiver {
 	return &LengthPrefixTCPReceiver{reader: reader}
 }
 
+// Receive implements TCPReceiver by making a length-limited read into a byte
+// buffer.
 func (receiver *LengthPrefixTCPReceiver) Receive() ([]byte, error) {
 	lenPrefix := make([]byte, 4)
 	if _, err := io.ReadFull(receiver.reader, lenPrefix); err != nil {
@@ -160,10 +195,21 @@ func (receiver *LengthPrefixTCPReceiver) Receive() ([]byte, error) {
 	return msg, err
 }
 
+// EncryptedTCPReceiver implements TCPReceiver by wrapping a TCPReceiver with
+// TCPCryptoState.
+// TODO(pb): unexport
+type EncryptedTCPReceiver struct {
+	receiver TCPReceiver
+	state    *TCPCryptoState
+}
+
+// NewEncryptedTCPReceiver returns a usable EncryptedTCPReceiver.
 func NewEncryptedTCPReceiver(receiver TCPReceiver, sessionKey *[32]byte, outbound bool) *EncryptedTCPReceiver {
 	return &EncryptedTCPReceiver{receiver: receiver, state: NewTCPCryptoState(sessionKey, !outbound)}
 }
 
+// Receive implements TCPReceiver by reading from the wrapped TCPReceiver and
+// unboxing the encrypted message, returning the decoded message.
 func (receiver *EncryptedTCPReceiver) Receive() ([]byte, error) {
 	msg, err := receiver.receiver.Receive()
 	if err != nil {
