@@ -13,4 +13,4 @@ fi
 gometalinter \
 	--exclude='error return value not checked.*(Close|Log|Print)' \
 	--exclude='duplicate of.*_test.go.*' \
-	--tests
+	--tests --deadline=10s
