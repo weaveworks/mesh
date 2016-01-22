@@ -11,6 +11,10 @@ then
 fi
 
 gometalinter \
-	--exclude='error return value not checked.*(Close|Log|Print)' \
-	--exclude='duplicate of.*_test.go.*' \
-	--tests --deadline=10s
+	--exclude='error return value not checked.*(Close|Log|Print).*\(errcheck\)$' \
+	--exclude='.*_test\.go:.*error return value not checked.*\(errcheck\)$' \
+	--exclude='duplicate of.*_test.go.*\(dupl\)$' \
+	--disable=aligncheck \
+	--cyclo-over=25 \
+	--tests \
+	--deadline=10s
