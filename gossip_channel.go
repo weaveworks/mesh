@@ -76,9 +76,7 @@ func (c *GossipChannel) deliverBroadcast(srcName PeerName, _ []byte, dec *gob.De
 	if err != nil || data == nil {
 		return err
 	}
-	if err := c.relayBroadcast(srcName, data); err != nil {
-		c.log(err)
-	}
+	c.relayBroadcast(srcName, data)
 	return nil
 }
 
@@ -103,8 +101,8 @@ func (c *GossipChannel) GossipUnicast(dstPeerName PeerName, msg []byte) error {
 
 // GossipBroadcast implements Gossip, relaying update to all members of the
 // channel.
-func (c *GossipChannel) GossipBroadcast(update GossipData) error {
-	return c.relayBroadcast(c.ourself.Name, update)
+func (c *GossipChannel) GossipBroadcast(update GossipData) {
+	c.relayBroadcast(c.ourself.Name, update)
 }
 
 // Send relays data into the channel topology via random neighbours.
@@ -128,12 +126,11 @@ func (c *GossipChannel) relayUnicast(dstPeerName PeerName, buf []byte) (err erro
 	return err
 }
 
-func (c *GossipChannel) relayBroadcast(srcName PeerName, update GossipData) error {
+func (c *GossipChannel) relayBroadcast(srcName PeerName, update GossipData) {
 	c.routes.EnsureRecalculated()
 	for _, conn := range c.ourself.ConnectionsTo(c.routes.BroadcastAll(srcName)) {
 		c.senderFor(conn).Broadcast(srcName, update)
 	}
-	return nil
 }
 
 func (c *GossipChannel) relay(srcName PeerName, data GossipData) {

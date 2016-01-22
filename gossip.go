@@ -20,7 +20,7 @@ type Gossip interface {
 
 	// GossipBroadcast emits a message to all peers in the mesh.
 	// TODO(pb): rename to Broadcast?
-	GossipBroadcast(update GossipData) error
+	GossipBroadcast(update GossipData)
 }
 
 // Gossiper is the receiving interface.
