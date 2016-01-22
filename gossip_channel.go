@@ -123,7 +123,7 @@ func (c *GossipChannel) relayUnicast(dstPeerName PeerName, buf []byte) (err erro
 	} else if conn, found := c.ourself.ConnectionTo(relayPeerName); !found {
 		err = fmt.Errorf("unable to find connection to relay peer %s", relayPeerName)
 	} else {
-		conn.(ProtocolSender).SendProtocolMsg(ProtocolMsg{ProtocolGossipUnicast, buf})
+		err = conn.(ProtocolSender).SendProtocolMsg(ProtocolMsg{ProtocolGossipUnicast, buf})
 	}
 	return err
 }

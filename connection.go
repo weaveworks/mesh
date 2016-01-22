@@ -224,7 +224,10 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, errorChan <
 	defer func() { conn.shutdown(err) }()
 	defer close(finished)
 
-	conn.TCPConn.SetLinger(0)
+	if err = conn.TCPConn.SetLinger(0); err != nil {
+		return
+	}
+
 	intro, err := ProtocolIntroParams{
 		MinVersion: conn.Router.ProtocolMinVersion,
 		MaxVersion: ProtocolMaxVersion,
@@ -485,8 +488,9 @@ func (conn *LocalConnection) sendProtocolMsg(m ProtocolMsg) error {
 func (conn *LocalConnection) receiveTCP(receiver TCPReceiver) {
 	var err error
 	for {
-		conn.extendReadDeadline()
-
+		if err = conn.extendReadDeadline(); err != nil {
+			break
+		}
 		var msg []byte
 		if msg, err = receiver.Receive(); err != nil {
 			break
@@ -515,8 +519,8 @@ func (conn *LocalConnection) handleProtocolMsg(tag ProtocolTag, payload []byte) 
 	return nil
 }
 
-func (conn *LocalConnection) extendReadDeadline() {
-	conn.TCPConn.SetReadDeadline(time.Now().Add(TCPHeartbeat * 2))
+func (conn *LocalConnection) extendReadDeadline() error {
+	return conn.TCPConn.SetReadDeadline(time.Now().Add(TCPHeartbeat * 2))
 }
 
 // Untrusted returns true if either we don't trust our remote, or are not

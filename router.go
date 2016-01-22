@@ -163,8 +163,12 @@ func (router *Router) BroadcastTopologyUpdate(update []*Peer) {
 	for _, p := range update {
 		names[p.Name] = void
 	}
-	router.TopologyGossip.GossipBroadcast(
-		&TopologyGossipData{peers: router.Peers, update: names})
+	if err := router.TopologyGossip.GossipBroadcast(&TopologyGossipData{
+		peers: router.Peers,
+		update: names,
+	}); err != nil {
+		log.Errorf("Error broadcasting topology update: %v", err)
+	}
 }
 
 // OnGossipUnicast implements Gossiper, but always returns an error, as a
