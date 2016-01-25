@@ -11,30 +11,30 @@ import (
 // TODO test gossip unicast; atm we only test topology gossip and
 // surrogates, neither of which employ unicast.
 
-type MockGossipConnection struct {
-	RemoteConnection
+type mockGossipConnection struct {
+	remoteConnection
 	dest          *Router
-	gossipSenders *GossipSenders
+	gossipSenders *gossipSenders
 	start         chan struct{}
 }
 
-func NewTestRouter(name string) *Router {
+func newTestRouter(name string) *Router {
 	peerName, _ := PeerNameFromString(name)
 	router := NewRouter(Config{}, peerName, "nick", nil)
 	router.Start()
 	return router
 }
 
-func (conn *MockGossipConnection) SendProtocolMsg(protocolMsg ProtocolMsg) error {
+func (conn *mockGossipConnection) SendProtocolMsg(protocolMsg ProtocolMsg) error {
 	<-conn.start
 	return conn.dest.handleGossip(protocolMsg.tag, protocolMsg.msg)
 }
 
-func (conn *MockGossipConnection) GossipSenders() *GossipSenders {
+func (conn *mockGossipConnection) GossipSenders() *gossipSenders {
 	return conn.gossipSenders
 }
 
-func (conn *MockGossipConnection) Start() {
+func (conn *mockGossipConnection) Start() {
 	close(conn.start)
 }
 
@@ -48,24 +48,24 @@ func sendPendingGossip(routers ...*Router) {
 	}
 }
 
-func AddTestGossipConnection(r1, r2 *Router) {
+func addTestGossipConnection(r1, r2 *Router) {
 	c1 := r1.NewTestGossipConnection(r2)
 	c2 := r2.NewTestGossipConnection(r1)
 	c1.Start()
 	c2.Start()
 }
 
-func (router *Router) NewTestGossipConnection(r *Router) *MockGossipConnection {
+func (router *Router) NewTestGossipConnection(r *Router) *mockGossipConnection {
 	to := r.Ourself.Peer
-	toPeer := NewPeer(to.Name, to.NickName, to.UID, 0, to.ShortID)
+	toPeer := newPeer(to.Name, to.NickName, to.UID, 0, to.ShortID)
 	toPeer = router.Peers.FetchWithDefault(toPeer) // Has side-effect of incrementing refcount
 
-	conn := &MockGossipConnection{
-		RemoteConnection: RemoteConnection{router.Ourself.Peer, toPeer, "", false, true},
+	conn := &mockGossipConnection{
+		remoteConnection: remoteConnection{router.Ourself.Peer, toPeer, "", false, true},
 		dest:             r,
 		start:            make(chan struct{}),
 	}
-	conn.gossipSenders = NewGossipSenders(conn, make(chan struct{}))
+	conn.gossipSenders = newGossipSenders(conn, make(chan struct{}))
 	router.Ourself.handleAddConnection(conn)
 	router.Ourself.handleConnectionEstablished(conn)
 	return conn
@@ -82,10 +82,10 @@ func (router *Router) DeleteTestGossipConnection(r *Router) {
 // the routers supplied as arguments, carrying across all UID and
 // version information.
 func (router *Router) tp(routers ...*Router) *Peer {
-	peer := NewPeerFrom(router.Ourself.Peer)
-	connections := make(map[PeerName]Connection)
+	peer := newPeerFrom(router.Ourself.Peer)
+	connections := make(map[PeerName]connection)
 	for _, r := range routers {
-		p := NewPeerFrom(r.Ourself.Peer)
+		p := newPeerFrom(r.Ourself.Peer)
 		connections[r.Ourself.Peer.Name] = newMockConnection(peer, p)
 	}
 	peer.Version = router.Ourself.Peer.Version
@@ -109,24 +109,24 @@ func flushAndCheckTopology(t *testing.T, routers []*Router, wantedPeers ...*Peer
 
 func TestGossipTopology(t *testing.T) {
 	// Create some peers that will talk to each other
-	r1 := NewTestRouter("01:00:00:01:00:00")
-	r2 := NewTestRouter("02:00:00:02:00:00")
-	r3 := NewTestRouter("03:00:00:03:00:00")
+	r1 := newTestRouter("01:00:00:01:00:00")
+	r2 := newTestRouter("02:00:00:02:00:00")
+	r3 := newTestRouter("03:00:00:03:00:00")
 	routers := []*Router{r1, r2, r3}
 	// Check state when they have no connections
 	checkTopology(t, r1, r1.tp())
 	checkTopology(t, r2, r2.tp())
 
 	// Now try adding some connections
-	AddTestGossipConnection(r1, r2)
+	addTestGossipConnection(r1, r2)
 	sendPendingGossip(r1, r2)
 	checkTopology(t, r1, r1.tp(r2), r2.tp(r1))
 	checkTopology(t, r2, r1.tp(r2), r2.tp(r1))
 
-	AddTestGossipConnection(r2, r3)
+	addTestGossipConnection(r2, r3)
 	flushAndCheckTopology(t, routers, r1.tp(r2), r2.tp(r1, r3), r3.tp(r2))
 
-	AddTestGossipConnection(r3, r1)
+	addTestGossipConnection(r3, r1)
 	flushAndCheckTopology(t, routers, r1.tp(r2, r3), r2.tp(r1, r3), r3.tp(r1, r2))
 
 	// Drop the connection from 2 to 3
@@ -144,12 +144,12 @@ func TestGossipTopology(t *testing.T) {
 
 func TestGossipSurrogate(t *testing.T) {
 	// create the topology r1 <-> r2 <-> r3
-	r1 := NewTestRouter("01:00:00:01:00:00")
-	r2 := NewTestRouter("02:00:00:02:00:00")
-	r3 := NewTestRouter("03:00:00:03:00:00")
+	r1 := newTestRouter("01:00:00:01:00:00")
+	r2 := newTestRouter("02:00:00:02:00:00")
+	r3 := newTestRouter("03:00:00:03:00:00")
 	routers := []*Router{r1, r2, r3}
-	AddTestGossipConnection(r1, r2)
-	AddTestGossipConnection(r3, r2)
+	addTestGossipConnection(r1, r2)
+	addTestGossipConnection(r3, r2)
 	flushAndCheckTopology(t, routers, r1.tp(r2), r2.tp(r1, r3), r3.tp(r2))
 
 	// create a gossiper at either end, but not the middle
@@ -193,7 +193,7 @@ func (g *testGossiper) OnGossipBroadcast(_ PeerName, update []byte) (GossipData,
 	for _, v := range update {
 		g.state[v] = struct{}{}
 	}
-	return NewSurrogateGossipData(update), nil
+	return newSurrogateGossipData(update), nil
 }
 
 func (g *testGossiper) Gossip() GossipData {
@@ -203,7 +203,7 @@ func (g *testGossiper) Gossip() GossipData {
 	for v := range g.state {
 		state = append(state, v)
 	}
-	return NewSurrogateGossipData(state)
+	return newSurrogateGossipData(state)
 }
 
 func (g *testGossiper) OnGossip(update []byte) (GossipData, error) {
@@ -219,7 +219,7 @@ func (g *testGossiper) OnGossip(update []byte) (GossipData, error) {
 	if len(delta) == 0 {
 		return nil, nil
 	}
-	return NewSurrogateGossipData(delta), nil
+	return newSurrogateGossipData(delta), nil
 }
 
 func (g *testGossiper) checkHas(t *testing.T, vs ...byte) {
@@ -233,5 +233,5 @@ func (g *testGossiper) checkHas(t *testing.T, vs ...byte) {
 }
 
 func broadcast(s Gossip, v byte) {
-	s.GossipBroadcast(NewSurrogateGossipData([]byte{v}))
+	s.GossipBroadcast(newSurrogateGossipData([]byte{v}))
 }

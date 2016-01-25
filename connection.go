@@ -11,13 +11,13 @@ import (
 
 // Connection is the commonality of LocalConnection and RemoteConnection.
 // TODO(pb): does this need to be exported?
-type Connection interface {
+type connection interface {
 	Local() *Peer
 	Remote() *Peer
 	RemoteTCPAddr() string
 	Outbound() bool
 	Established() bool
-	BreakTie(Connection) ConnectionTieBreak
+	BreakTie(connection) connectionTieBreak
 	Shutdown(error)
 	Log(args ...interface{})
 }
@@ -25,20 +25,20 @@ type Connection interface {
 // ConnectionTieBreak describes the outcome of a tiebreaking contest between
 // two connections.
 // TODO(pb): does this need to be exported?
-type ConnectionTieBreak int
+type connectionTieBreak int
 
 const (
 	// TieBreakWon indicates the candidate has won the tiebreak.
 	// TODO(pb): does this need to be exported?
-	TieBreakWon ConnectionTieBreak = iota
+	tieBreakWon connectionTieBreak = iota
 
 	// TieBreakLost indicates the candidate has lost the tiebreak.
 	// TODO(pb): does this need to be exported?
-	TieBreakLost
+	tieBreakLost
 
 	// TieBreakTied indicates the tiebreaking contest had no winner.
 	// TODO(pb): does this need to be exported?
-	TieBreakTied
+	tieBreakTied
 )
 
 // ErrConnectToSelf will be unexported soon.
@@ -48,7 +48,7 @@ var ErrConnectToSelf = fmt.Errorf("Cannot connect to ourself")
 // RemoteConnection is a local representation of the remote side of a
 // connection. It has limited capabilities compared to LocalConnection.
 // TODO(pb): does this need to be exported?
-type RemoteConnection struct {
+type remoteConnection struct {
 	local         *Peer
 	remote        *Peer
 	remoteTCPAddr string
@@ -61,38 +61,38 @@ type RemoteConnection struct {
 // TODO(pb): does this need to be exported?
 type LocalConnection struct {
 	sync.RWMutex
-	RemoteConnection
+	remoteConnection
 	TCPConn         *net.TCPConn
 	TrustRemote     bool // is remote on a trusted subnet?
 	TrustedByRemote bool // does remote trust us?
 	version         byte
-	tcpSender       TCPSender
+	tcpSender       tCPSender
 	SessionKey      *[32]byte
 	heartbeatTCP    *time.Ticker
 	Router          *Router
 	uid             uint64
-	actionChan      chan<- ConnectionAction
+	actionChan      chan<- connectionAction
 	errorChan       chan<- error
 	finished        <-chan struct{} // closed to signal that actorLoop has finished
 	OverlayConn     OverlayConnection
-	gossipSenders   *GossipSenders
+	gossipSenders   *gossipSenders
 }
 
 // GossipConnection describes something that can yield multiple GossipSenders.
 // TODO(pb): does this need to be exported?
-type GossipConnection interface {
-	GossipSenders() *GossipSenders
+type gossipConnection interface {
+	GossipSenders() *gossipSenders
 }
 
 // ConnectionAction is the actor closure used by LocalConnection. If an action
 // returns an error, it will terminate the actor loop, which terminates the
 // connection in turn.
 // TODO(pb): does this need to be exported?
-type ConnectionAction func() error
+type connectionAction func() error
 
 // NewRemoteConnection returns a usable RemoteConnection.
-func NewRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, established bool) *RemoteConnection {
-	return &RemoteConnection{
+func newRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, established bool) *remoteConnection {
+	return &remoteConnection{
 		local:         from,
 		remote:        to,
 		remoteTCPAddr: tcpAddr,
@@ -102,42 +102,42 @@ func NewRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, establis
 }
 
 // Local implements Connection.
-func (conn *RemoteConnection) Local() *Peer { return conn.local }
+func (conn *remoteConnection) Local() *Peer { return conn.local }
 
 // Remote implements Connection.
-func (conn *RemoteConnection) Remote() *Peer { return conn.remote }
+func (conn *remoteConnection) Remote() *Peer { return conn.remote }
 
 // RemoteTCPAddr implements Connection.
-func (conn *RemoteConnection) RemoteTCPAddr() string { return conn.remoteTCPAddr }
+func (conn *remoteConnection) RemoteTCPAddr() string { return conn.remoteTCPAddr }
 
 // Outbound implements Connection.
-func (conn *RemoteConnection) Outbound() bool { return conn.outbound }
+func (conn *remoteConnection) Outbound() bool { return conn.outbound }
 
 // Established implements Connection.
-func (conn *RemoteConnection) Established() bool { return conn.established }
+func (conn *remoteConnection) Established() bool { return conn.established }
 
 // BreakTie implements Connection.
-func (conn *RemoteConnection) BreakTie(Connection) ConnectionTieBreak { return TieBreakTied }
+func (conn *remoteConnection) BreakTie(connection) connectionTieBreak { return tieBreakTied }
 
 // Shutdown implements Connection.
-func (conn *RemoteConnection) Shutdown(error) {}
+func (conn *remoteConnection) Shutdown(error) {}
 
 // Log implements Connection.
-func (conn *RemoteConnection) Log(args ...interface{}) {
+func (conn *remoteConnection) Log(args ...interface{}) {
 	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
 // StartLocalConnection does not return anything. If the connection is
 // successful, it will end up in the local peer's connections map.
-func StartLocalConnection(connRemote *RemoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool) {
+func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool) {
 	if connRemote.local != router.Ourself.Peer {
 		log.Fatal("Attempt to create local connection from a peer which is not ourself")
 	}
-	actionChan := make(chan ConnectionAction, ChannelSize)
+	actionChan := make(chan connectionAction, ChannelSize)
 	errorChan := make(chan error, 1)
 	finished := make(chan struct{})
 	conn := &LocalConnection{
-		RemoteConnection: *connRemote, // NB, we're taking a copy of connRemote here.
+		remoteConnection: *connRemote, // NB, we're taking a copy of connRemote here.
 		Router:           router,
 		TCPConn:          tcpConn,
 		TrustRemote:      router.Trusts(connRemote),
@@ -146,21 +146,21 @@ func StartLocalConnection(connRemote *RemoteConnection, tcpConn *net.TCPConn, ro
 		errorChan:        errorChan,
 		finished:         finished,
 	}
-	conn.gossipSenders = NewGossipSenders(conn, finished)
+	conn.gossipSenders = newGossipSenders(conn, finished)
 	go conn.run(actionChan, errorChan, finished, acceptNewPeer)
 }
 
 // BreakTie conducts a tiebreaking contest between two connections.
-func (conn *LocalConnection) BreakTie(dupConn Connection) ConnectionTieBreak {
+func (conn *LocalConnection) BreakTie(dupConn connection) connectionTieBreak {
 	dupConnLocal := dupConn.(*LocalConnection)
 	// conn.uid is used as the tie breaker here, in the knowledge that
 	// both sides will make the same decision.
 	if conn.uid < dupConnLocal.uid {
-		return TieBreakWon
+		return tieBreakWon
 	} else if dupConnLocal.uid < conn.uid {
-		return TieBreakLost
+		return tieBreakLost
 	}
-	return TieBreakTied
+	return tieBreakTied
 }
 
 // Established returns true if the connection is established.
@@ -179,7 +179,7 @@ func (conn *LocalConnection) SendProtocolMsg(m ProtocolMsg) error {
 }
 
 // GossipSenders implements GossipConnection.
-func (conn *LocalConnection) GossipSenders() *GossipSenders {
+func (conn *LocalConnection) GossipSenders() *gossipSenders {
 	return conn.gossipSenders
 }
 
@@ -207,7 +207,7 @@ func (conn *LocalConnection) Shutdown(err error) {
 // Send an actor request to the actorLoop, but don't block if
 // actorLoop has exited - see http://blog.golang.org/pipelines for
 // pattern
-func (conn *LocalConnection) sendAction(action ConnectionAction) {
+func (conn *LocalConnection) sendAction(action connectionAction) {
 	select {
 	case conn.actionChan <- action:
 	case <-conn.finished:
@@ -216,7 +216,7 @@ func (conn *LocalConnection) sendAction(action ConnectionAction) {
 
 // ACTOR server
 
-func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, errorChan <-chan error, finished chan<- struct{}, acceptNewPeer bool) {
+func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <-chan error, finished chan<- struct{}, acceptNewPeer bool) {
 	var err error // important to use this var and not create another one with 'err :='
 	defer func() { conn.shutdown(err) }()
 	defer close(finished)
@@ -225,7 +225,7 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, errorChan <
 		return
 	}
 
-	intro, err := ProtocolIntroParams{
+	intro, err := protocolIntroParams{
 		MinVersion: conn.Router.ProtocolMinVersion,
 		MaxVersion: ProtocolMaxVersion,
 		Features:   conn.makeFeatures(),
@@ -381,7 +381,7 @@ func (conn *LocalConnection) parseFeatures(features features) (*Peer, error) {
 	}
 	conn.TrustedByRemote = trusted
 
-	uid, err := ParsePeerUID(features.Get("UID"))
+	uid, err := parsePeerUID(features.Get("UID"))
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +392,7 @@ func (conn *LocalConnection) parseFeatures(features features) (*Peer, error) {
 	}
 
 	conn.uid ^= remoteConnID
-	peer := NewPeer(name, nickName, uid, 0, PeerShortID(shortID))
+	peer := newPeer(name, nickName, uid, 0, PeerShortID(shortID))
 	peer.HasShortID = hasShortID
 	return peer, nil
 }
@@ -414,7 +414,7 @@ func (conn *LocalConnection) registerRemote(remote *Peer, acceptNewPeer bool) er
 	return nil
 }
 
-func (conn *LocalConnection) actorLoop(actionChan <-chan ConnectionAction, errorChan <-chan error) (err error) {
+func (conn *LocalConnection) actorLoop(actionChan <-chan connectionAction, errorChan <-chan error) (err error) {
 	fwdErrorChan := conn.OverlayConn.ErrorChannel()
 	fwdEstablishedChan := conn.OverlayConn.EstablishedChannel()
 
@@ -471,12 +471,12 @@ func (conn *LocalConnection) shutdown(err error) {
 }
 
 func (conn *LocalConnection) sendOverlayControlMessage(tag byte, msg []byte) error {
-	return conn.sendProtocolMsg(ProtocolMsg{ProtocolTag(tag), msg})
+	return conn.sendProtocolMsg(ProtocolMsg{protocolTag(tag), msg})
 }
 
 // Helpers
 
-func (conn *LocalConnection) sendSimpleProtocolMsg(tag ProtocolTag) error {
+func (conn *LocalConnection) sendSimpleProtocolMsg(tag protocolTag) error {
 	return conn.sendProtocolMsg(ProtocolMsg{tag: tag})
 }
 
@@ -484,7 +484,7 @@ func (conn *LocalConnection) sendProtocolMsg(m ProtocolMsg) error {
 	return conn.tcpSender.Send(append([]byte{byte(m.tag)}, m.msg...))
 }
 
-func (conn *LocalConnection) receiveTCP(receiver TCPReceiver) {
+func (conn *LocalConnection) receiveTCP(receiver tCPReceiver) {
 	var err error
 	for {
 		if err = conn.extendReadDeadline(); err != nil {
@@ -498,14 +498,14 @@ func (conn *LocalConnection) receiveTCP(receiver TCPReceiver) {
 			conn.Log("ignoring blank msg")
 			continue
 		}
-		if err = conn.handleProtocolMsg(ProtocolTag(msg[0]), msg[1:]); err != nil {
+		if err = conn.handleProtocolMsg(protocolTag(msg[0]), msg[1:]); err != nil {
 			break
 		}
 	}
 	conn.Shutdown(err)
 }
 
-func (conn *LocalConnection) handleProtocolMsg(tag ProtocolTag, payload []byte) error {
+func (conn *LocalConnection) handleProtocolMsg(tag protocolTag, payload []byte) error {
 	switch tag {
 	case ProtocolHeartbeat:
 	case ProtocolReserved1, ProtocolReserved2, ProtocolReserved3, ProtocolOverlayControlMsg:

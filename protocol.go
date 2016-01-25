@@ -52,7 +52,7 @@ var (
 // ProtocolIntroConn collect the parts of the net.TCPConn we require to do the
 // protocol intro, to support testing.
 // TODO(pb): does this need to be exported?
-type ProtocolIntroConn interface {
+type protocolIntroConn interface {
 	// io.Reader
 	Read(b []byte) (n int, err error)
 
@@ -67,27 +67,27 @@ type ProtocolIntroConn interface {
 
 // ProtocolIntroParams capture the params necessary to negotiate a protocol
 // intro with a remote peer.
-type ProtocolIntroParams struct {
+type protocolIntroParams struct {
 	MinVersion byte
 	MaxVersion byte
 	Features   map[string]string
-	Conn       ProtocolIntroConn
+	Conn       protocolIntroConn
 	Password   []byte
 	Outbound   bool
 }
 
 // ProtocolIntroResults capture the results from a successful protocol intro.
-type ProtocolIntroResults struct {
+type protocolIntroResults struct {
 	Features   map[string]string
-	Receiver   TCPReceiver
-	Sender     TCPSender
+	Receiver   tCPReceiver
+	Sender     tCPSender
 	SessionKey *[32]byte
 	Version    byte
 }
 
 // DoIntro executes the protocol introduction.
 // TODO(pb): eliminate named return params?
-func (params ProtocolIntroParams) DoIntro() (res ProtocolIntroResults, err error) {
+func (params protocolIntroParams) DoIntro() (res protocolIntroResults, err error) {
 	if err = params.Conn.SetDeadline(time.Now().Add(HeaderTimeout)); err != nil {
 		return
 	}
@@ -98,7 +98,7 @@ func (params ProtocolIntroParams) DoIntro() (res ProtocolIntroResults, err error
 
 	var pubKey, privKey *[32]byte
 	if params.Password != nil {
-		if pubKey, privKey, err = GenerateKeyPair(); err != nil {
+		if pubKey, privKey, err = generateKeyPair(); err != nil {
 			return
 		}
 	}
@@ -122,7 +122,7 @@ func (params ProtocolIntroParams) DoIntro() (res ProtocolIntroResults, err error
 	return
 }
 
-func (params ProtocolIntroParams) exchangeProtocolHeader() (byte, error) {
+func (params protocolIntroParams) exchangeProtocolHeader() (byte, error) {
 	// Write in a separate goroutine to avoid the possibility of
 	// deadlock.  The result channel is of size 1 so that the
 	// goroutine does not linger even if we encounter an error on
@@ -177,7 +177,7 @@ func (params ProtocolIntroParams) exchangeProtocolHeader() (byte, error) {
 // values are the messages on the connection (encrypted for an
 // encrypted connection).  For an encrypted connection, the public key
 // is passed in the "PublicKey" feature as a string of hex digits.
-func (res *ProtocolIntroResults) doIntroV1(params ProtocolIntroParams, pubKey, privKey *[32]byte) error {
+func (res *protocolIntroResults) doIntroV1(params protocolIntroParams, pubKey, privKey *[32]byte) error {
 	features := filterV1Features(params.Features)
 	if pubKey != nil {
 		features["PublicKey"] = hex.EncodeToString(pubKey[:])
@@ -203,8 +203,8 @@ func (res *ProtocolIntroResults) doIntroV1(params ProtocolIntroParams, pubKey, p
 		return err
 	}
 
-	res.Sender = NewGobTCPSender(enc)
-	res.Receiver = NewGobTCPReceiver(dec)
+	res.Sender = newGobTCPSender(enc)
+	res.Receiver = newGobTCPReceiver(dec)
 
 	if pubKey == nil {
 		if _, present := res.Features["PublicKey"]; present {
@@ -256,7 +256,7 @@ func filterV1Features(intro map[string]string) map[string]string {
 //
 // The first message contains the encoded features map (so in contrast
 // to V1, it will be encrypted on an encrypted connection).
-func (res *ProtocolIntroResults) doIntroV2(params ProtocolIntroParams, pubKey, privKey *[32]byte) error {
+func (res *protocolIntroResults) doIntroV2(params protocolIntroParams, pubKey, privKey *[32]byte) error {
 	// Public key exchange
 	var wbuf []byte
 	if pubKey == nil {
@@ -288,8 +288,8 @@ func (res *ProtocolIntroResults) doIntroV2(params ProtocolIntroParams, pubKey, p
 			return ErrExpectedCrypto
 		}
 
-		res.Sender = NewLengthPrefixTCPSender(params.Conn)
-		res.Receiver = NewLengthPrefixTCPReceiver(params.Conn)
+		res.Sender = newLengthPrefixTCPSender(params.Conn)
+		res.Receiver = newLengthPrefixTCPReceiver(params.Conn)
 
 	case 1:
 		if pubKey == nil {
@@ -301,8 +301,8 @@ func (res *ProtocolIntroResults) doIntroV2(params ProtocolIntroParams, pubKey, p
 			return err
 		}
 
-		res.Sender = NewLengthPrefixTCPSender(params.Conn)
-		res.Receiver = NewLengthPrefixTCPReceiver(params.Conn)
+		res.Sender = newLengthPrefixTCPSender(params.Conn)
+		res.Receiver = newLengthPrefixTCPReceiver(params.Conn)
 		res.setupCrypto(params, rbuf, privKey)
 
 	default:
@@ -340,16 +340,16 @@ func (res *ProtocolIntroResults) doIntroV2(params ProtocolIntroParams, pubKey, p
 	return nil
 }
 
-func (res *ProtocolIntroResults) setupCrypto(params ProtocolIntroParams, remotePubKey []byte, privKey *[32]byte) {
+func (res *protocolIntroResults) setupCrypto(params protocolIntroParams, remotePubKey []byte, privKey *[32]byte) {
 	var remotePubKeyArr [32]byte
 	copy(remotePubKeyArr[:], remotePubKey)
-	res.SessionKey = FormSessionKey(&remotePubKeyArr, privKey, params.Password)
-	res.Sender = NewEncryptedTCPSender(res.Sender, res.SessionKey, params.Outbound)
-	res.Receiver = NewEncryptedTCPReceiver(res.Receiver, res.SessionKey, params.Outbound)
+	res.SessionKey = formSessionKey(&remotePubKeyArr, privKey, params.Password)
+	res.Sender = newEncryptedTCPSender(res.Sender, res.SessionKey, params.Outbound)
+	res.Receiver = newEncryptedTCPReceiver(res.Receiver, res.SessionKey, params.Outbound)
 }
 
 // ProtocolTag identifies the type of msg encoded in a ProtocolMsg.
-type ProtocolTag byte
+type protocolTag byte
 
 const (
 	// ProtocolHeartbeat identifies a heartbeat msg.
@@ -372,11 +372,11 @@ const (
 
 // ProtocolMsg combines a tag and encoded msg.
 type ProtocolMsg struct {
-	tag ProtocolTag
+	tag protocolTag
 	msg []byte
 }
 
 // ProtocolSender describes anything that can emit a ProtocolMsg on the wire.
-type ProtocolSender interface {
+type protocolSender interface {
 	SendProtocolMsg(m ProtocolMsg) error
 }

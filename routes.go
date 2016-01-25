@@ -11,7 +11,7 @@ type broadcastRoutes map[PeerName][]PeerName
 // Routes aggregates unicast and broadcast routes for our peer.
 type Routes struct {
 	sync.RWMutex
-	ourself      *LocalPeer
+	ourself      *localPeer
 	peers        *Peers
 	onChange     []func()
 	unicast      unicastRoutes
@@ -26,7 +26,7 @@ type Routes struct {
 }
 
 // NewRoutes returns a usable Routes based on the LocalPeer and existing Peers.
-func NewRoutes(ourself *LocalPeer, peers *Peers) *Routes {
+func newRoutes(ourself *localPeer, peers *Peers) *Routes {
 	recalculate := make(chan *struct{}, 1)
 	wait := make(chan chan struct{})
 	action := make(chan func())
@@ -54,7 +54,7 @@ func (routes *Routes) OnChange(callback func()) {
 }
 
 // PeerNames returns the peers that are accountd for in the routes.
-func (routes *Routes) PeerNames() PeerNameSet {
+func (routes *Routes) PeerNames() peerNameSet {
 	return routes.peers.Names()
 }
 
@@ -132,7 +132,7 @@ func (routes *Routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoute
 // neighbours than elsewhere. In extremis, on peers with fewer than
 // log2(n_peers) neighbours, all neighbours are returned.
 func (routes *Routes) RandomNeighbours(except PeerName) []PeerName {
-	destinations := make(PeerNameSet)
+	destinations := make(peerNameSet)
 	routes.RLock()
 	defer routes.RUnlock()
 	count := int(math.Log2(float64(len(routes.unicastAll))))

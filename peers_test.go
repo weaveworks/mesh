@@ -19,8 +19,8 @@ import (
 // - non-gc of peers that are only referenced locally
 
 func newNode(name PeerName) (*Peer, *Peers) {
-	peer := NewLocalPeer(name, "", nil)
-	peers := NewPeers(peer)
+	peer := newLocalPeer(name, "", nil)
+	peers := newPeers(peer)
 	return peer.Peer, peers
 }
 
@@ -128,7 +128,7 @@ func TestShortIDCollisions(t *testing.T) {
 	// overwhelmingly likely
 	ps := make([]*Peer, 1<<PeerShortIDBits)
 	for i := 0; i < 1<<PeerShortIDBits; i++ {
-		ps[i] = NewPeer(PeerName(i), "", PeerUID(i), 0,
+		ps[i] = newPeer(PeerName(i), "", PeerUID(i), 0,
 			PeerShortID(rng.Intn(1<<PeerShortIDBits)))
 	}
 
@@ -141,7 +141,7 @@ func TestShortIDCollisions(t *testing.T) {
 
 	// Fill peers
 	shuffle()
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	for _, p := range ps {
 		peers.addByShortID(p, &pending)
 	}
@@ -200,7 +200,7 @@ func TestShortIDReassignmentEasy(t *testing.T) {
 	_, peers := newNode(PeerName(0))
 
 	for i := 1; i <= 10; i++ {
-		peers.FetchWithDefault(NewPeer(PeerName(i), "", PeerUID(i), 0,
+		peers.FetchWithDefault(newPeer(PeerName(i), "", PeerUID(i), 0,
 			PeerShortID(rng.Intn(1<<PeerShortIDBits))))
 	}
 
@@ -214,9 +214,9 @@ func TestShortIDReassignmentHard(t *testing.T) {
 
 	// Take all short ids
 	ps := make([]*Peer, 1<<PeerShortIDBits)
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	for i := 0; i < 1<<PeerShortIDBits; i++ {
-		ps[i] = NewPeer(PeerName(i), "", PeerUID(i), 0,
+		ps[i] = newPeer(PeerName(i), "", PeerUID(i), 0,
 			PeerShortID(i))
 		peers.addByShortID(ps[i], &pending)
 	}
@@ -241,7 +241,7 @@ func TestShortIDReassignmentHard(t *testing.T) {
 
 func checkShortIDReassignment(t *testing.T, peers *Peers) {
 	oldShortID := peers.ourself.ShortID
-	peers.reassignLocalShortID(&PeersPendingNotifications{})
+	peers.reassignLocalShortID(&peersPendingNotifications{})
 	require.NotEqual(t, oldShortID, peers.ourself.ShortID)
 	require.Equal(t, peers.ourself.Peer, peers.byShortID[peers.ourself.ShortID].peer)
 }
@@ -252,7 +252,7 @@ func TestShortIDInvalidation(t *testing.T) {
 	// need to use a short id that is not the local peer's
 	shortID := peers.ourself.ShortID + 1
 
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 
 	requireInvalidateShortIDs := func(expect bool) {
 		require.Equal(t, expect, pending.invalidateShortIDs)
@@ -260,17 +260,17 @@ func TestShortIDInvalidation(t *testing.T) {
 	}
 
 	// The use of a fresh short id does not cause invalidation
-	a := NewPeer(PeerName(1), "", PeerUID(1), 0, shortID)
+	a := newPeer(PeerName(1), "", PeerUID(1), 0, shortID)
 	peers.addByShortID(a, &pending)
 	requireInvalidateShortIDs(false)
 
 	// An addition which does not change the mapping
-	b := NewPeer(PeerName(2), "", PeerUID(2), 0, shortID)
+	b := newPeer(PeerName(2), "", PeerUID(2), 0, shortID)
 	peers.addByShortID(b, &pending)
 	requireInvalidateShortIDs(false)
 
 	// An addition which does change the mapping
-	c := NewPeer(PeerName(0), "", PeerUID(0), 0, shortID)
+	c := newPeer(PeerName(0), "", PeerUID(0), 0, shortID)
 	peers.addByShortID(c, &pending)
 	requireInvalidateShortIDs(true)
 
@@ -301,7 +301,7 @@ func TestShortIDPropagation(t *testing.T) {
 	old := peers12.PeerSummary
 
 	require.True(t,
-		peers2.reassignLocalShortID(&PeersPendingNotifications{}))
+		peers2.reassignLocalShortID(&peersPendingNotifications{}))
 	peers1.ApplyUpdate(peers2.EncodePeers(peers2.Names()))
 	require.NotEqual(t, old.Version, peers12.Version)
 	require.NotEqual(t, old.ShortID, peers12.ShortID)
@@ -313,7 +313,7 @@ func TestShortIDCollision(t *testing.T) {
 	_, peers2 := newNode(PeerName(2))
 	_, peers3 := newNode(PeerName(3))
 
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	peers1.setLocalShortID(1, &pending)
 	peers2.setLocalShortID(2, &pending)
 	peers3.setLocalShortID(3, &pending)
@@ -354,7 +354,7 @@ func TestDeferredShortIDReassignment(t *testing.T) {
 
 	// Connect us to other peers occupying all short ids
 	others := make([]*Peers, 1<<PeerShortIDBits)
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	for i := range others {
 		_, others[i] = newNode(PeerName(i))
 		others[i].setLocalShortID(PeerShortID(i), &pending)

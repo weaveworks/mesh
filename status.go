@@ -16,8 +16,8 @@ type Status struct {
 	NickName           string
 	Port               int
 	Peers              []PeerStatus
-	UnicastRoutes      []UnicastRouteStatus
-	BroadcastRoutes    []BroadcastRouteStatus
+	UnicastRoutes      []unicastRouteStatus
+	BroadcastRoutes    []broadcastRouteStatus
 	Connections        []LocalConnectionStatus
 	Targets            []string
 	OverlayDiagnostics interface{}
@@ -35,13 +35,13 @@ func NewStatus(router *Router) *Status {
 		router.Ourself.Name.String(),
 		router.Ourself.NickName,
 		router.Port,
-		NewPeerStatusSlice(router.Peers),
-		NewUnicastRouteStatusSlice(router.Routes),
-		NewBroadcastRouteStatusSlice(router.Routes),
-		NewLocalConnectionStatusSlice(router.ConnectionMaker),
-		NewTargetSlice(router.ConnectionMaker),
+		newPeerStatusSlice(router.Peers),
+		newUnicastRouteStatusSlice(router.Routes),
+		newBroadcastRouteStatusSlice(router.Routes),
+		newLocalConnectionStatusSlice(router.ConnectionMaker),
+		newTargetSlice(router.ConnectionMaker),
 		router.Overlay.Diagnostics(),
-		NewTrustedSubnetsSlice(router.TrustedSubnets),
+		newTrustedSubnetsSlice(router.TrustedSubnets),
 	}
 }
 
@@ -52,16 +52,16 @@ type PeerStatus struct {
 	UID         PeerUID
 	ShortID     PeerShortID
 	Version     uint64
-	Connections []ConnectionStatus
+	Connections []connectionStatus
 }
 
 // NewPeerStatusSlice takes a snapshot of the state of peers.
 // TODO(pb): unexport and rename as Make
-func NewPeerStatusSlice(peers *Peers) []PeerStatus {
+func newPeerStatusSlice(peers *Peers) []PeerStatus {
 	var slice []PeerStatus
 
 	peers.ForEach(func(peer *Peer) {
-		var connections []ConnectionStatus
+		var connections []connectionStatus
 		if peer == peers.ourself.Peer {
 			for conn := range peers.ourself.Connections() {
 				connections = append(connections, newConnectionStatus(conn))
@@ -87,7 +87,7 @@ func NewPeerStatusSlice(peers *Peers) []PeerStatus {
 }
 
 // ConnectionStatus is the current state of a connection to a peer.
-type ConnectionStatus struct {
+type connectionStatus struct {
 	Name        string
 	NickName    string
 	Address     string
@@ -96,8 +96,8 @@ type ConnectionStatus struct {
 }
 
 // TODO(pb): rename as Make
-func newConnectionStatus(c Connection) ConnectionStatus {
-	return ConnectionStatus{
+func newConnectionStatus(c connection) connectionStatus {
+	return connectionStatus{
 		c.Remote().Name.String(),
 		c.Remote().NickName,
 		c.RemoteTCPAddr(),
@@ -107,42 +107,42 @@ func newConnectionStatus(c Connection) ConnectionStatus {
 }
 
 // UnicastRouteStatus is the current state of an established unicast route.
-type UnicastRouteStatus struct {
+type unicastRouteStatus struct {
 	Dest, Via string
 }
 
 // NewUnicastRouteStatusSlice takes a snapshot of the unicast routes in routes.
 // TODO(pb): unexport and rename as Make
-func NewUnicastRouteStatusSlice(routes *Routes) []UnicastRouteStatus {
+func newUnicastRouteStatusSlice(routes *Routes) []unicastRouteStatus {
 	routes.RLock()
 	defer routes.RUnlock()
 
-	var slice []UnicastRouteStatus
+	var slice []unicastRouteStatus
 	for dest, via := range routes.unicast {
-		slice = append(slice, UnicastRouteStatus{dest.String(), via.String()})
+		slice = append(slice, unicastRouteStatus{dest.String(), via.String()})
 	}
 	return slice
 }
 
 // BroadcastRouteStatus is the current state of an established broadcast route.
-type BroadcastRouteStatus struct {
+type broadcastRouteStatus struct {
 	Source string
 	Via    []string
 }
 
 // NewBroadcastRouteStatusSlice takes a snapshot of the broadcast routes in routes.
 // TODO(pb): unexport and rename as Make
-func NewBroadcastRouteStatusSlice(routes *Routes) []BroadcastRouteStatus {
+func newBroadcastRouteStatusSlice(routes *Routes) []broadcastRouteStatus {
 	routes.RLock()
 	defer routes.RUnlock()
 
-	var slice []BroadcastRouteStatus
+	var slice []broadcastRouteStatus
 	for source, via := range routes.broadcast {
 		var hops []string
 		for _, hop := range via {
 			hops = append(hops, hop.String())
 		}
-		slice = append(slice, BroadcastRouteStatus{source.String(), hops})
+		slice = append(slice, broadcastRouteStatus{source.String(), hops})
 	}
 	return slice
 }
@@ -158,7 +158,7 @@ type LocalConnectionStatus struct {
 // NewLocalConnectionStatusSlice takes a snapshot of the active local
 // connections in the ConnectionMaker.
 // TODO(pb): unexport and rename as Make
-func NewLocalConnectionStatusSlice(cm *ConnectionMaker) []LocalConnectionStatus {
+func newLocalConnectionStatusSlice(cm *connectionMaker) []LocalConnectionStatus {
 	resultChan := make(chan []LocalConnectionStatus, 0)
 	cm.actionChan <- func() bool {
 		var slice []LocalConnectionStatus
@@ -211,7 +211,7 @@ func NewLocalConnectionStatusSlice(cm *ConnectionMaker) []LocalConnectionStatus 
 // NewTargetSlice takes a snapshot of the active targets (direct peers) in the
 // ConnectionMaker.
 // TODO(pb): unexport and rename as Make
-func NewTargetSlice(cm *ConnectionMaker) []string {
+func newTargetSlice(cm *connectionMaker) []string {
 	resultChan := make(chan []string, 0)
 	cm.actionChan <- func() bool {
 		var slice []string
@@ -226,7 +226,7 @@ func NewTargetSlice(cm *ConnectionMaker) []string {
 
 // NewTrustedSubnetsSlice makes a human-readable copy of the trustedSubnets.
 // TODO(pb): unexport and rename as Make
-func NewTrustedSubnetsSlice(trustedSubnets []*net.IPNet) []string {
+func newTrustedSubnetsSlice(trustedSubnets []*net.IPNet) []string {
 	trustedSubnetStrs := []string{}
 	for _, trustedSubnet := range trustedSubnets {
 		trustedSubnetStrs = append(trustedSubnetStrs, trustedSubnet.String())

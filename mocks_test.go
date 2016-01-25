@@ -16,7 +16,7 @@ import (
 func (peers *Peers) AddTestConnection(p *Peer) {
 	summary := p.PeerSummary
 	summary.Version = 0
-	toPeer := NewPeerFromSummary(summary)
+	toPeer := newPeerFromSummary(summary)
 	toPeer = peers.FetchWithDefault(toPeer) // Has side-effect of incrementing refcount
 	conn := newMockConnection(peers.ourself.Peer, toPeer)
 	peers.ourself.addConnection(conn)
@@ -25,11 +25,11 @@ func (peers *Peers) AddTestConnection(p *Peer) {
 
 // Add to peers a connection from p1 to p2
 func (peers *Peers) AddTestRemoteConnection(p1, p2 *Peer) {
-	fromPeer := NewPeerFrom(p1)
+	fromPeer := newPeerFrom(p1)
 	fromPeer = peers.FetchWithDefault(fromPeer)
-	toPeer := NewPeerFrom(p2)
+	toPeer := newPeerFrom(p2)
 	toPeer = peers.FetchWithDefault(toPeer)
-	peers.ourself.addConnection(&RemoteConnection{fromPeer, toPeer, "", false, false})
+	peers.ourself.addConnection(&remoteConnection{fromPeer, toPeer, "", false, false})
 }
 
 func (peers *Peers) DeleteTestConnection(p *Peer) {
@@ -44,13 +44,13 @@ func (peers *Peers) DeleteTestConnection(p *Peer) {
 // RemoteConnection, without the RemoteTCPAddr(). We are making it a
 // separate type in order to distinguish what is created by the test
 // from what is created by the real code.
-func newMockConnection(from, to *Peer) Connection {
-	type mockConnection struct{ RemoteConnection }
-	return &mockConnection{RemoteConnection{from, to, "", false, false}}
+func newMockConnection(from, to *Peer) connection {
+	type mockConnection struct{ remoteConnection }
+	return &mockConnection{remoteConnection{from, to, "", false, false}}
 }
 
-func checkEqualConns(t *testing.T, ourName PeerName, got, wanted map[PeerName]Connection) {
-	checkConns := make(PeerNameSet)
+func checkEqualConns(t *testing.T, ourName PeerName, got, wanted map[PeerName]connection) {
+	checkConns := make(peerNameSet)
 	for _, conn := range wanted {
 		checkConns[conn.Remote().Name] = struct{}{}
 	}

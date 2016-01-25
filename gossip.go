@@ -57,11 +57,11 @@ type GossipData interface {
 // GossipSender accumulates GossipData that needs to be sent to one
 // destination, and sends it when possible. GossipSender is one-to-one with a
 // channel.
-type GossipSender struct {
+type gossipSender struct {
 	sync.Mutex
 	makeMsg          func(msg []byte) ProtocolMsg
 	makeBroadcastMsg func(srcName PeerName, msg []byte) ProtocolMsg
-	sender           ProtocolSender
+	sender           protocolSender
 	gossip           GossipData
 	broadcasts       map[PeerName]GossipData
 	more             chan<- struct{}
@@ -69,15 +69,15 @@ type GossipSender struct {
 }
 
 // NewGossipSender constructs a usable GossipSender.
-func NewGossipSender(
+func newGossipSender(
 	makeMsg func(msg []byte) ProtocolMsg,
 	makeBroadcastMsg func(srcName PeerName, msg []byte) ProtocolMsg,
-	sender ProtocolSender,
+	sender protocolSender,
 	stop <-chan struct{},
-) *GossipSender {
+) *gossipSender {
 	more := make(chan struct{}, 1)
 	flush := make(chan chan<- bool)
-	s := &GossipSender{
+	s := &gossipSender{
 		makeMsg:          makeMsg,
 		makeBroadcastMsg: makeBroadcastMsg,
 		sender:           sender,
@@ -89,7 +89,7 @@ func NewGossipSender(
 }
 
 // TODO(pb): no need to parameterize more and flush
-func (s *GossipSender) run(stop <-chan struct{}, more <-chan struct{}, flush <-chan chan<- bool) {
+func (s *gossipSender) run(stop <-chan struct{}, more <-chan struct{}, flush <-chan chan<- bool) {
 	sent := false
 	for {
 		select {
@@ -119,7 +119,7 @@ func (s *GossipSender) run(stop <-chan struct{}, more <-chan struct{}, flush <-c
 	}
 }
 
-func (s *GossipSender) deliver(stop <-chan struct{}) (bool, error) {
+func (s *gossipSender) deliver(stop <-chan struct{}) (bool, error) {
 	sent := false
 	// We must not hold our lock when sending, since that would block
 	// the callers of Send/Broadcast while we are stuck waiting for
@@ -144,7 +144,7 @@ func (s *GossipSender) deliver(stop <-chan struct{}) (bool, error) {
 	}
 }
 
-func (s *GossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte) ProtocolMsg) {
+func (s *gossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte) ProtocolMsg) {
 	s.Lock()
 	defer s.Unlock()
 	switch {
@@ -165,7 +165,7 @@ func (s *GossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte)
 
 // Send accumulates the GossipData and will send it eventually.
 // Send and Broadcast accumulate into different buckets.
-func (s *GossipSender) Send(data GossipData) {
+func (s *gossipSender) Send(data GossipData) {
 	s.Lock()
 	defer s.Unlock()
 	if s.empty() {
@@ -180,7 +180,7 @@ func (s *GossipSender) Send(data GossipData) {
 
 // Broadcast accumulates the GossipData under the given srcName and will send
 // it eventually. Send and Broadcast accumulate into different buckets.
-func (s *GossipSender) Broadcast(srcName PeerName, data GossipData) {
+func (s *gossipSender) Broadcast(srcName PeerName, data GossipData) {
 	s.Lock()
 	defer s.Unlock()
 	if s.empty() {
@@ -194,9 +194,9 @@ func (s *GossipSender) Broadcast(srcName PeerName, data GossipData) {
 	}
 }
 
-func (s *GossipSender) empty() bool { return s.gossip == nil && len(s.broadcasts) == 0 }
+func (s *gossipSender) empty() bool { return s.gossip == nil && len(s.broadcasts) == 0 }
 
-func (s *GossipSender) prod() {
+func (s *gossipSender) prod() {
 	select {
 	case s.more <- struct{}{}:
 	default:
@@ -205,7 +205,7 @@ func (s *GossipSender) prod() {
 
 // Flush sends all pending data, and returns true if anything was sent since
 // the previous flush. For testing.
-func (s *GossipSender) Flush() bool {
+func (s *gossipSender) Flush() bool {
 	ch := make(chan bool)
 	s.flush <- ch
 	return <-ch
@@ -214,22 +214,22 @@ func (s *GossipSender) Flush() bool {
 // GossipSenders wraps a ProtocolSender (e.g. a LocalConnection) and yields
 // per-channel GossipSenders.
 // TODO(pb): may be able to remove this and use makeGossipSender directly
-type GossipSenders struct {
+type gossipSenders struct {
 	sync.Mutex
-	sender  ProtocolSender
+	sender  protocolSender
 	stop    <-chan struct{}
-	senders map[string]*GossipSender
+	senders map[string]*gossipSender
 }
 
 // NewGossipSenders returns a usable GossipSenders leveraging the ProtocolSender.
 // TODO(pb): is stop chan the best way to do that?
-func NewGossipSenders(sender ProtocolSender, stop <-chan struct{}) *GossipSenders {
-	return &GossipSenders{sender: sender, stop: stop, senders: make(map[string]*GossipSender)}
+func newGossipSenders(sender protocolSender, stop <-chan struct{}) *gossipSenders {
+	return &gossipSenders{sender: sender, stop: stop, senders: make(map[string]*gossipSender)}
 }
 
 // Sender yields the GossipSender for the named channel.
 // It will use the factory function if no sender yet exists.
-func (gs *GossipSenders) Sender(channelName string, makeGossipSender func(sender ProtocolSender, stop <-chan struct{}) *GossipSender) *GossipSender {
+func (gs *gossipSenders) Sender(channelName string, makeGossipSender func(sender protocolSender, stop <-chan struct{}) *gossipSender) *gossipSender {
 	gs.Lock()
 	defer gs.Unlock()
 	s, found := gs.senders[channelName]
@@ -241,7 +241,7 @@ func (gs *GossipSenders) Sender(channelName string, makeGossipSender func(sender
 }
 
 // Flush flushes all managed senders. Used for testing.
-func (gs *GossipSenders) Flush() bool {
+func (gs *gossipSenders) Flush() bool {
 	sent := false
 	gs.Lock()
 	defer gs.Unlock()
@@ -253,13 +253,13 @@ func (gs *GossipSenders) Flush() bool {
 
 // GossipChannels is an index of channel name to gossip channel.
 // TODO(pb): does this need to be exported?
-type GossipChannels map[string]*GossipChannel
+type gossipChannels map[string]*gossipChannel
 
 // NewGossip constructs and returns a usable GossipChannel from the router.
 // TODO(pb): rename?
 // TODO(pb): move all of these methods to router.go
 func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
-	channel := NewGossipChannel(channelName, router.Ourself, router.Routes, g)
+	channel := newGossipChannel(channelName, router.Ourself, router.Routes, g)
 	router.gossipLock.Lock()
 	defer router.gossipLock.Unlock()
 	if _, found := router.gossipChannels[channelName]; found {
@@ -269,7 +269,7 @@ func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
 	return channel
 }
 
-func (router *Router) gossipChannel(channelName string) *GossipChannel {
+func (router *Router) gossipChannel(channelName string) *gossipChannel {
 	router.gossipLock.RLock()
 	channel, found := router.gossipChannels[channelName]
 	router.gossipLock.RUnlock()
@@ -281,14 +281,14 @@ func (router *Router) gossipChannel(channelName string) *GossipChannel {
 	if channel, found = router.gossipChannels[channelName]; found {
 		return channel
 	}
-	channel = NewGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper)
+	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper)
 	channel.log("created surrogate channel")
 	router.gossipChannels[channelName] = channel
 	return channel
 }
 
-func (router *Router) gossipChannelSet() map[*GossipChannel]struct{} {
-	channels := make(map[*GossipChannel]struct{})
+func (router *Router) gossipChannelSet() map[*gossipChannel]struct{} {
+	channels := make(map[*gossipChannel]struct{})
 	router.gossipLock.RLock()
 	defer router.gossipLock.RUnlock()
 	for _, channel := range router.gossipChannels {
@@ -308,7 +308,7 @@ func (router *Router) SendAllGossip() {
 }
 
 // SendAllGossipDown relays all pending gossip data for each channel via conn.
-func (router *Router) SendAllGossipDown(conn Connection) {
+func (router *Router) SendAllGossipDown(conn connection) {
 	for channel := range router.gossipChannelSet() {
 		if gossip := channel.gossiper.Gossip(); gossip != nil {
 			channel.SendDown(conn, gossip)
@@ -320,7 +320,7 @@ func (router *Router) SendAllGossipDown(conn Connection) {
 func (router *Router) sendPendingGossip() bool {
 	sentSomething := false
 	for conn := range router.Ourself.Connections() {
-		sentSomething = conn.(GossipConnection).GossipSenders().Flush() || sentSomething
+		sentSomething = conn.(gossipConnection).GossipSenders().Flush() || sentSomething
 	}
 	return sentSomething
 }

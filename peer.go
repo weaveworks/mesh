@@ -15,7 +15,7 @@ type Peer struct {
 	Name PeerName
 	PeerSummary
 	localRefCount uint64 // maintained by Peers
-	connections   map[PeerName]Connection
+	connections   map[PeerName]connection
 }
 
 // PeerSummary is a collection of identifying information for a peer.
@@ -29,22 +29,22 @@ type PeerSummary struct {
 }
 
 // ConnectionSet is an set of connection objects.
-type ConnectionSet map[Connection]struct{}
+type connectionSet map[connection]struct{}
 
 // NewPeerFromSummary constructs a new Peer object with no connections from
 // the provided summary.
-func NewPeerFromSummary(summary PeerSummary) *Peer {
+func newPeerFromSummary(summary PeerSummary) *Peer {
 	return &Peer{
 		Name:        PeerNameFromBin(summary.NameByte),
 		PeerSummary: summary,
-		connections: make(map[PeerName]Connection),
+		connections: make(map[PeerName]connection),
 	}
 }
 
 // NewPeer constructs a new Peer object with no connections from the provided
 // composite parts.
-func NewPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortID PeerShortID) *Peer {
-	return NewPeerFromSummary(PeerSummary{
+func newPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortID PeerShortID) *Peer {
+	return newPeerFromSummary(PeerSummary{
 		NameByte:   name.Bin(),
 		NickName:   nickName,
 		UID:        uid,
@@ -56,14 +56,14 @@ func NewPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortI
 
 // NewPeerPlaceholder constructs a partial Peer object with only the passed
 // name. Useful when we get a strange update from the mesh.
-func NewPeerPlaceholder(name PeerName) *Peer {
-	return NewPeerFromSummary(PeerSummary{NameByte: name.Bin()})
+func newPeerPlaceholder(name PeerName) *Peer {
+	return newPeerFromSummary(PeerSummary{NameByte: name.Bin()})
 }
 
 // NewPeerFrom constructs a new Peer object that is a copy of the passed peer.
 // Primarily used for tests.
-func NewPeerFrom(peer *Peer) *Peer {
-	return NewPeerFromSummary(peer.PeerSummary)
+func newPeerFrom(peer *Peer) *Peer {
+	return newPeerFromSummary(peer.PeerSummary)
 }
 
 // String returns the peer name and nickname.
@@ -98,7 +98,7 @@ func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 	nextWorklist := []*Peer{peer}
 	for len(nextWorklist) > 0 {
 		worklist := nextWorklist
-		sort.Sort(ListOfPeers(worklist))
+		sort.Sort(listOfPeers(worklist))
 		nextWorklist = []*Peer{}
 		for _, curPeer := range worklist {
 			if curPeer == stopAt {
@@ -147,7 +147,7 @@ func (peer *Peer) ForEachConnectedPeer(establishedAndSymmetric bool, exclude map
 type PeerUID uint64
 
 // ParsePeerUID parses a decimal peer UID from a string.
-func ParsePeerUID(s string) (PeerUID, error) {
+func parsePeerUID(s string) (PeerUID, error) {
 	uid, err := strconv.ParseUint(s, 10, 64)
 	return PeerUID(uid), err
 }
@@ -194,19 +194,19 @@ func randUint16() (r uint16) {
 
 // ListOfPeers implements sort.Interface on a slice of Peers.
 // TODO(pb): does this need to be exported?
-type ListOfPeers []*Peer
+type listOfPeers []*Peer
 
 // Len implements sort.Interface.
-func (lop ListOfPeers) Len() int {
+func (lop listOfPeers) Len() int {
 	return len(lop)
 }
 
 // Swap implements sort.Interface.
-func (lop ListOfPeers) Swap(i, j int) {
+func (lop listOfPeers) Swap(i, j int) {
 	lop[i], lop[j] = lop[j], lop[i]
 }
 
 // Less implements sort.Interface.
-func (lop ListOfPeers) Less(i, j int) bool {
+func (lop listOfPeers) Less(i, j int) bool {
 	return lop[i].Name < lop[j].Name
 }
