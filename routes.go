@@ -139,7 +139,7 @@ func (routes *Routes) RandomNeighbours(except PeerName) []PeerName {
 	// depends on go's random map iteration
 	for _, dst := range routes.unicastAll {
 		if dst != UnknownPeerName && dst != except {
-			destinations[dst] = void
+			destinations[dst] = struct{}{}
 			if len(destinations) >= count {
 				break
 			}

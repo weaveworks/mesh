@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"net"
 	"sync"
@@ -106,15 +107,19 @@ func (router *Router) UsingPassword() bool {
 
 func (router *Router) listenTCP(localPort int) {
 	localAddr, err := net.ResolveTCPAddr("tcp4", fmt.Sprint(":", localPort))
-	checkFatal(err)
+	if err != nil {
+		log.Fatal(err)
+	}
 	ln, err := net.ListenTCP("tcp4", localAddr)
-	checkFatal(err)
+	if err != nil {
+		log.Fatal(err)
+	}
 	go func() {
 		defer ln.Close()
 		for {
 			tcpConn, err := ln.AcceptTCP()
 			if err != nil {
-				log.Errorln(err)
+				log.Println(err)
 				continue
 			}
 			router.acceptTCP(tcpConn)
@@ -143,10 +148,10 @@ type TopologyGossipData struct {
 func (d *TopologyGossipData) Merge(other GossipData) GossipData {
 	names := make(PeerNameSet)
 	for name := range d.update {
-		names[name] = void
+		names[name] = struct{}{}
 	}
 	for name := range other.(*TopologyGossipData).update {
-		names[name] = void
+		names[name] = struct{}{}
 	}
 	return &TopologyGossipData{peers: d.peers, update: names}
 }
@@ -161,7 +166,7 @@ func (d *TopologyGossipData) Encode() [][]byte {
 func (router *Router) BroadcastTopologyUpdate(update []*Peer) {
 	names := make(PeerNameSet)
 	for _, p := range update {
-		names[p.Name] = void
+		names[p.Name] = struct{}{}
 	}
 	router.TopologyGossip.GossipBroadcast(&TopologyGossipData{peers: router.Peers, update: names})
 }
@@ -220,7 +225,7 @@ func (router *Router) Trusts(remote *RemoteConnection) bool {
 		}
 	} else {
 		// Should not happen as remoteTCPAddr was obtained from TCPConn
-		log.Errorf("Unable to parse remote TCP addr: %s", err)
+		log.Printf("Unable to parse remote TCP addr: %s", err)
 	}
 	return false
 }

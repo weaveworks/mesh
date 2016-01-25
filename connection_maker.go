@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"time"
@@ -153,7 +154,7 @@ func (cm *ConnectionMaker) ConnectionAborted(address string, err error) {
 // TODO(pb): does this need to be exported?
 func (cm *ConnectionMaker) ConnectionCreated(conn Connection) {
 	cm.actionChan <- func() bool {
-		cm.connections[conn] = void
+		cm.connections[conn] = struct{}{}
 		if conn.Outbound() {
 			target := cm.targets[conn.RemoteTCPAddr()]
 			target.state = TargetConnected
@@ -227,7 +228,7 @@ func (cm *ConnectionMaker) checkStateAndAttemptConnections() time.Duration {
 		if _, connected := ourConnectedTargets[address]; connected {
 			return
 		}
-		validTarget[address] = void
+		validTarget[address] = struct{}{}
 		if _, found := cm.targets[address]; found {
 			return
 		}
@@ -248,7 +249,7 @@ func (cm *ConnectionMaker) checkStateAndAttemptConnections() time.Duration {
 			}
 		}
 		address := cm.completeAddr(*addr)
-		directTarget[address] = void
+		directTarget[address] = struct{}{}
 		if attempt {
 			addTarget(address)
 		}
@@ -271,13 +272,13 @@ func (cm *ConnectionMaker) ourConnections() (PeerNameSet, map[string]struct{}, m
 	)
 	for conn := range cm.connections {
 		address := conn.RemoteTCPAddr()
-		ourConnectedPeers[conn.Remote().Name] = void
-		ourConnectedTargets[address] = void
+		ourConnectedPeers[conn.Remote().Name] = struct{}{}
+		ourConnectedTargets[address] = struct{}{}
 		if conn.Outbound() {
 			continue
 		}
 		if ip, _, err := net.SplitHostPort(address); err == nil { // should always succeed
-			ourInboundIPs[ip] = void
+			ourInboundIPs[ip] = struct{}{}
 		}
 	}
 	return ourConnectedPeers, ourConnectedTargets, ourInboundIPs
@@ -341,7 +342,7 @@ func (cm *ConnectionMaker) connectToTargets(validTarget map[string]struct{}, dir
 func (cm *ConnectionMaker) attemptConnection(address string, acceptNewPeer bool) {
 	log.Printf("->[%s] attempting connection", address)
 	if err := cm.ourself.CreateConnection(address, acceptNewPeer); err != nil {
-		log.Errorf("->[%s] error during connection attempt: %v", address, err)
+		log.Printf("->[%s] error during connection attempt: %v", address, err)
 		cm.ConnectionAborted(address, err)
 	}
 }

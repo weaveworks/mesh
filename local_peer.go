@@ -3,6 +3,7 @@ package mesh
 import (
 	"encoding/gob"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -39,7 +40,7 @@ func (peer *LocalPeer) Connections() ConnectionSet {
 	peer.RLock()
 	defer peer.RUnlock()
 	for _, conn := range peer.connections {
-		connections[conn] = void
+		connections[conn] = struct{}{}
 	}
 	return connections
 }

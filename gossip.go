@@ -1,7 +1,7 @@
 package mesh
 
 import (
-	"fmt"
+	"log"
 	"sync"
 )
 
@@ -198,7 +198,7 @@ func (s *GossipSender) empty() bool { return s.gossip == nil && len(s.broadcasts
 
 func (s *GossipSender) prod() {
 	select {
-	case s.more <- void:
+	case s.more <- struct{}{}:
 	default:
 	}
 }
@@ -263,7 +263,7 @@ func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
 	router.gossipLock.Lock()
 	defer router.gossipLock.Unlock()
 	if _, found := router.gossipChannels[channelName]; found {
-		checkFatal(fmt.Errorf("[gossip] duplicate channel %s", channelName))
+		log.Fatalf("[gossip] duplicate channel %s", channelName)
 	}
 	router.gossipChannels[channelName] = channel
 	return channel
@@ -292,7 +292,7 @@ func (router *Router) gossipChannelSet() map[*GossipChannel]struct{} {
 	router.gossipLock.RLock()
 	defer router.gossipLock.RUnlock()
 	for _, channel := range router.gossipChannels {
-		channels[channel] = void
+		channels[channel] = struct{}{}
 	}
 	return channels
 }

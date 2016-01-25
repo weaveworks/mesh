@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 )
@@ -177,8 +178,9 @@ func randomPeerShortID() PeerShortID {
 
 func randBytes(n int) []byte {
 	buf := make([]byte, n)
-	_, err := rand.Read(buf)
-	checkFatal(err)
+	if _, err := rand.Read(buf); err != nil {
+		log.Fatal(err)
+	}
 	return buf
 }
 

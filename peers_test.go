@@ -338,7 +338,7 @@ func TestShortIDCollision(t *testing.T) {
 	// The Peers do not have a Router, so broadcastPeerUpdate does
 	// nothing in the context of this test.  So we fake what it
 	// would do.
-	updated[PeerName(2)] = void
+	updated[PeerName(2)] = struct{}{}
 
 	// the update from peer 2 should include its short id change
 	peers3.ApplyUpdate(peers2.EncodePeers(updated))

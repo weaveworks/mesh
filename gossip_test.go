@@ -191,7 +191,7 @@ func (g *testGossiper) OnGossipBroadcast(_ PeerName, update []byte) (GossipData,
 	g.Lock()
 	defer g.Unlock()
 	for _, v := range update {
-		g.state[v] = void
+		g.state[v] = struct{}{}
 	}
 	return NewSurrogateGossipData(update), nil
 }
@@ -213,7 +213,7 @@ func (g *testGossiper) OnGossip(update []byte) (GossipData, error) {
 	for _, v := range update {
 		if _, found := g.state[v]; !found {
 			delta = append(delta, v)
-			g.state[v] = void
+			g.state[v] = struct{}{}
 		}
 	}
 	if len(delta) == 0 {

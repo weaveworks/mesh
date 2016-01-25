@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"log"
 )
 
 // GossipChannel is a logical communication channel within a physical mesh.
@@ -166,7 +167,9 @@ func GobEncode(items ...interface{}) []byte {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
 	for _, i := range items {
-		checkFatal(enc.Encode(i))
+		if err := enc.Encode(i); err != nil {
+			log.Fatal(err)
+		}
 	}
 	return buf.Bytes()
 }

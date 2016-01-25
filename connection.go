@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -124,11 +125,6 @@ func (conn *RemoteConnection) Shutdown(error) {}
 // Log implements Connection.
 func (conn *RemoteConnection) Log(args ...interface{}) {
 	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
-}
-
-// ErrorLog is the same as log. TODO(pb): remove.
-func (conn *RemoteConnection) ErrorLog(args ...interface{}) {
-	log.Errorln(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
 // StartLocalConnection does not return anything. If the connection is
@@ -447,13 +443,15 @@ func (conn *LocalConnection) actorLoop(actionChan <-chan ConnectionAction, error
 
 func (conn *LocalConnection) shutdown(err error) {
 	if conn.remote == nil {
-		log.Errorf("->[%s] connection shutting down due to error during handshake: %v", conn.remoteTCPAddr, err)
+		log.Printf("->[%s] connection shutting down due to error during handshake: %v", conn.remoteTCPAddr, err)
 	} else {
-		conn.ErrorLog("connection shutting down due to error:", err)
+		conn.Log("connection shutting down due to error:", err)
 	}
 
 	if conn.TCPConn != nil {
-		checkWarn(conn.TCPConn.Close())
+		if err := conn.TCPConn.Close(); err != nil {
+			log.Printf("warning: %v", err)
+		}
 	}
 
 	if conn.remote != nil {

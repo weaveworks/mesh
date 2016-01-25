@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"io"
+	"log"
 	"math/rand"
 	"sync"
 )
@@ -362,7 +363,7 @@ func (peers *Peers) ApplyUpdate(update []byte) (PeerNameSet, PeerNameSet, error)
 
 	updateNames := make(PeerNameSet)
 	for _, peer := range decodedUpdate {
-		updateNames[peer.Name] = void
+		updateNames[peer.Name] = struct{}{}
 	}
 
 	return updateNames, newUpdate, nil
@@ -375,7 +376,7 @@ func (peers *Peers) Names() PeerNameSet {
 
 	names := make(PeerNameSet)
 	for name := range peers.byName {
-		names[name] = void
+		names[name] = struct{}{}
 	}
 	return names
 }
@@ -486,7 +487,7 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 			}
 		case newPeer:
 			peer.connections = makeConnsMap(peer, connSummaries, peers.byName)
-			newUpdate[name] = void
+			newUpdate[name] = struct{}{}
 		default: // existing peer
 			if newPeer.Version < peer.Version ||
 				(newPeer.Version == peer.Version &&
@@ -506,7 +507,7 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 				peer.HasShortID = newPeer.HasShortID
 				peers.addByShortID(peer, pending)
 			}
-			newUpdate[name] = void
+			newUpdate[name] = struct{}{}
 		}
 	}
 	return newUpdate
@@ -514,7 +515,9 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 
 // Encode writes the peer to the encoder.
 func (peer *Peer) Encode(enc *gob.Encoder) {
-	checkFatal(enc.Encode(peer.PeerSummary))
+	if err := enc.Encode(peer.PeerSummary); err != nil {
+		log.Fatal(err)
+	}
 
 	connSummaries := []ConnectionSummary{}
 	for _, conn := range peer.connections {
@@ -526,7 +529,9 @@ func (peer *Peer) Encode(enc *gob.Encoder) {
 		})
 	}
 
-	checkFatal(enc.Encode(connSummaries))
+	if err := enc.Encode(connSummaries); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func decodePeer(dec *gob.Decoder) (peerSummary PeerSummary, connSummaries []ConnectionSummary, err error) {
