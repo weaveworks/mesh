@@ -40,6 +40,7 @@ const (
 	TieBreakTied
 )
 
+// ErrConnectToSelf will be unexported soon.
 // TODO(pb): does this need to be exported?
 var ErrConnectToSelf = fmt.Errorf("Cannot connect to ourself")
 
