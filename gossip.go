@@ -1,9 +1,6 @@
 package mesh
 
-import (
-	"log"
-	"sync"
-)
+import "sync"
 
 // Gossip is the sending interface.
 // TODO(pb): rename to e.g. Sender
@@ -59,8 +56,8 @@ type GossipData interface {
 // channel.
 type gossipSender struct {
 	sync.Mutex
-	makeMsg          func(msg []byte) ProtocolMsg
-	makeBroadcastMsg func(srcName PeerName, msg []byte) ProtocolMsg
+	makeMsg          func(msg []byte) protocolMsg
+	makeBroadcastMsg func(srcName PeerName, msg []byte) protocolMsg
 	sender           protocolSender
 	gossip           GossipData
 	broadcasts       map[PeerName]GossipData
@@ -70,8 +67,8 @@ type gossipSender struct {
 
 // NewGossipSender constructs a usable GossipSender.
 func newGossipSender(
-	makeMsg func(msg []byte) ProtocolMsg,
-	makeBroadcastMsg func(srcName PeerName, msg []byte) ProtocolMsg,
+	makeMsg func(msg []byte) protocolMsg,
+	makeBroadcastMsg func(srcName PeerName, msg []byte) protocolMsg,
 	sender protocolSender,
 	stop <-chan struct{},
 ) *gossipSender {
@@ -144,7 +141,7 @@ func (s *gossipSender) deliver(stop <-chan struct{}) (bool, error) {
 	}
 }
 
-func (s *gossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte) ProtocolMsg) {
+func (s *gossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte) protocolMsg) {
 	s.Lock()
 	defer s.Unlock()
 	switch {
@@ -155,7 +152,7 @@ func (s *gossipSender) pick() (data GossipData, makeProtocolMsg func(msg []byte)
 	case len(s.broadcasts) > 0:
 		for srcName, d := range s.broadcasts {
 			data = d
-			makeProtocolMsg = func(msg []byte) ProtocolMsg { return s.makeBroadcastMsg(srcName, msg) }
+			makeProtocolMsg = func(msg []byte) protocolMsg { return s.makeBroadcastMsg(srcName, msg) }
 			delete(s.broadcasts, srcName)
 			break
 		}
@@ -211,7 +208,7 @@ func (s *gossipSender) Flush() bool {
 	return <-ch
 }
 
-// GossipSenders wraps a ProtocolSender (e.g. a LocalConnection) and yields
+// gossipSenders wraps a ProtocolSender (e.g. a LocalConnection) and yields
 // per-channel GossipSenders.
 // TODO(pb): may be able to remove this and use makeGossipSender directly
 type gossipSenders struct {
@@ -255,72 +252,6 @@ func (gs *gossipSenders) Flush() bool {
 // TODO(pb): does this need to be exported?
 type gossipChannels map[string]*gossipChannel
 
-// NewGossip constructs and returns a usable GossipChannel from the router.
-// TODO(pb): rename?
-// TODO(pb): move all of these methods to router.go
-func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
-	channel := newGossipChannel(channelName, router.Ourself, router.Routes, g)
-	router.gossipLock.Lock()
-	defer router.gossipLock.Unlock()
-	if _, found := router.gossipChannels[channelName]; found {
-		log.Fatalf("[gossip] duplicate channel %s", channelName)
-	}
-	router.gossipChannels[channelName] = channel
-	return channel
-}
-
-func (router *Router) gossipChannel(channelName string) *gossipChannel {
-	router.gossipLock.RLock()
-	channel, found := router.gossipChannels[channelName]
-	router.gossipLock.RUnlock()
-	if found {
-		return channel
-	}
-	router.gossipLock.Lock()
-	defer router.gossipLock.Unlock()
-	if channel, found = router.gossipChannels[channelName]; found {
-		return channel
-	}
-	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper)
-	channel.log("created surrogate channel")
-	router.gossipChannels[channelName] = channel
-	return channel
-}
-
-func (router *Router) gossipChannelSet() map[*gossipChannel]struct{} {
-	channels := make(map[*gossipChannel]struct{})
-	router.gossipLock.RLock()
-	defer router.gossipLock.RUnlock()
-	for _, channel := range router.gossipChannels {
-		channels[channel] = struct{}{}
-	}
-	return channels
-}
-
-// SendAllGossip relays all pending gossip data for each channel via random
-// neighbours.
-func (router *Router) SendAllGossip() {
-	for channel := range router.gossipChannelSet() {
-		if gossip := channel.gossiper.Gossip(); gossip != nil {
-			channel.Send(gossip)
-		}
-	}
-}
-
-// SendAllGossipDown relays all pending gossip data for each channel via conn.
-func (router *Router) SendAllGossipDown(conn connection) {
-	for channel := range router.gossipChannelSet() {
-		if gossip := channel.gossiper.Gossip(); gossip != nil {
-			channel.SendDown(conn, gossip)
-		}
-	}
-}
-
-// for testing
-func (router *Router) sendPendingGossip() bool {
-	sentSomething := false
-	for conn := range router.Ourself.Connections() {
-		sentSomething = conn.(gossipConnection).GossipSenders().Flush() || sentSomething
-	}
-	return sentSomething
+type gossipConnection interface {
+	gossipSenders() *gossipSenders
 }

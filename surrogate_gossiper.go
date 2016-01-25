@@ -2,34 +2,29 @@ package mesh
 
 // SurrogateGossiper ignores unicasts and relays broadcasts and gossips.
 // TODO(pb): should this be exported?
-type SurrogateGossiper struct{}
+type surrogateGossiper struct{}
 
-var _ Gossiper = &SurrogateGossiper{}
+var _ Gossiper = &surrogateGossiper{}
 
 // OnGossipUnicast implements Gossiper.
-func (*SurrogateGossiper) OnGossipUnicast(sender PeerName, msg []byte) error {
+func (*surrogateGossiper) OnGossipUnicast(sender PeerName, msg []byte) error {
 	return nil
 }
 
 // OnGossipBroadcast implements Gossiper.
-func (*SurrogateGossiper) OnGossipBroadcast(_ PeerName, update []byte) (GossipData, error) {
+func (*surrogateGossiper) OnGossipBroadcast(_ PeerName, update []byte) (GossipData, error) {
 	return newSurrogateGossipData(update), nil
 }
 
 // Gossip implements Gossiper.
-func (*SurrogateGossiper) Gossip() GossipData {
+func (*surrogateGossiper) Gossip() GossipData {
 	return nil
 }
 
 // OnGossip implements Gossiper.
-func (*SurrogateGossiper) OnGossip(update []byte) (GossipData, error) {
+func (*surrogateGossiper) OnGossip(update []byte) (GossipData, error) {
 	return newSurrogateGossipData(update), nil
 }
-
-// TODO(pb): remove?
-var (
-	surrogateGossiper SurrogateGossiper
-)
 
 // SurrogateGossipData is a simple in-memory GossipData.
 // TODO(pb): should this be exported?

@@ -59,7 +59,7 @@ func PeerNameFromBin(nameByte []byte) PeerName {
 }
 
 // Bin encodes PeerName as a byte slice.
-func (name PeerName) Bin() []byte {
+func (name PeerName) bytes() []byte {
 	return intmac(uint64(name))
 }
 

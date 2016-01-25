@@ -12,18 +12,18 @@ import (
 type gossipChannel struct {
 	name     string
 	ourself  *localPeer
-	routes   *Routes
+	routes   *routes
 	gossiper Gossiper
 }
 
 // NewGossipChannel returns a named, usable channel.
 // It delegates receiving duties to the passed Gossiper.
 // TODO(pb): does this need to be exported?
-func newGossipChannel(channelName string, ourself *localPeer, routes *Routes, g Gossiper) *gossipChannel {
+func newGossipChannel(channelName string, ourself *localPeer, r *routes, g Gossiper) *gossipChannel {
 	return &gossipChannel{
 		name:     channelName,
 		ourself:  ourself,
-		routes:   routes,
+		routes:   r,
 		gossiper: g,
 	}
 }
@@ -112,7 +112,7 @@ func (c *gossipChannel) Send(data GossipData) {
 }
 
 // SendDown relays data into the channel topology via conn.
-func (c *gossipChannel) SendDown(conn connection, data GossipData) {
+func (c *gossipChannel) SendDown(conn Connection, data GossipData) {
 	c.senderFor(conn).Send(data)
 }
 
@@ -122,7 +122,7 @@ func (c *gossipChannel) relayUnicast(dstPeerName PeerName, buf []byte) (err erro
 	} else if conn, found := c.ourself.ConnectionTo(relayPeerName); !found {
 		err = fmt.Errorf("unable to find connection to relay peer %s", relayPeerName)
 	} else {
-		err = conn.(protocolSender).SendProtocolMsg(ProtocolMsg{ProtocolGossipUnicast, buf})
+		err = conn.(protocolSender).SendProtocolMsg(protocolMsg{ProtocolGossipUnicast, buf})
 	}
 	return err
 }
@@ -141,20 +141,20 @@ func (c *gossipChannel) relay(srcName PeerName, data GossipData) {
 	}
 }
 
-func (c *gossipChannel) senderFor(conn connection) *gossipSender {
-	return conn.(gossipConnection).GossipSenders().Sender(c.name, c.makeGossipSender)
+func (c *gossipChannel) senderFor(conn Connection) *gossipSender {
+	return conn.(gossipConnection).gossipSenders().Sender(c.name, c.makeGossipSender)
 }
 
 func (c *gossipChannel) makeGossipSender(sender protocolSender, stop <-chan struct{}) *gossipSender {
 	return newGossipSender(c.makeMsg, c.makeBroadcastMsg, sender, stop)
 }
 
-func (c *gossipChannel) makeMsg(msg []byte) ProtocolMsg {
-	return ProtocolMsg{ProtocolGossip, gobEncode(c.name, c.ourself.Name, msg)}
+func (c *gossipChannel) makeMsg(msg []byte) protocolMsg {
+	return protocolMsg{ProtocolGossip, gobEncode(c.name, c.ourself.Name, msg)}
 }
 
-func (c *gossipChannel) makeBroadcastMsg(srcName PeerName, msg []byte) ProtocolMsg {
-	return ProtocolMsg{ProtocolGossipBroadcast, gobEncode(c.name, srcName, msg)}
+func (c *gossipChannel) makeBroadcastMsg(srcName PeerName, msg []byte) protocolMsg {
+	return protocolMsg{ProtocolGossipBroadcast, gobEncode(c.name, srcName, msg)}
 }
 
 func (c *gossipChannel) log(args ...interface{}) {

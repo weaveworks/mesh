@@ -7,21 +7,21 @@ import (
 
 // Status is our current state as a peer, as taken from a router.
 type Status struct {
-	Protocol           string
-	ProtocolMinVersion int
-	ProtocolMaxVersion int
-	Encryption         bool
-	PeerDiscovery      bool
+	protocol           string
+	protocolMinVersion int
+	protocolMaxVersion int
+	encryption         bool
+	peerDiscovery      bool
 	Name               string
-	NickName           string
-	Port               int
-	Peers              []PeerStatus
-	UnicastRoutes      []unicastRouteStatus
-	BroadcastRoutes    []broadcastRouteStatus
-	Connections        []LocalConnectionStatus
-	Targets            []string
-	OverlayDiagnostics interface{}
-	TrustedSubnets     []string
+	nickName           string
+	port               int
+	peers              []PeerStatus
+	unicastRoutes      []unicastRouteStatus
+	broadcastRoutes    []broadcastRouteStatus
+	connections        []LocalConnectionStatus
+	targets            []string
+	overlayDiagnostics interface{}
+	trustedSubnets     []string
 }
 
 // NewStatus returns a Status object, taken as a snapshot from the router.
@@ -30,7 +30,7 @@ func NewStatus(router *Router) *Status {
 		Protocol,
 		ProtocolMinVersion,
 		ProtocolMaxVersion,
-		router.UsingPassword(),
+		router.usingPassword(),
 		router.PeerDiscovery,
 		router.Ourself.Name.String(),
 		router.Ourself.NickName,
@@ -60,7 +60,7 @@ type PeerStatus struct {
 func newPeerStatusSlice(peers *Peers) []PeerStatus {
 	var slice []PeerStatus
 
-	peers.ForEach(func(peer *Peer) {
+	peers.forEach(func(peer *Peer) {
 		var connections []connectionStatus
 		if peer == peers.ourself.Peer {
 			for conn := range peers.ourself.Connections() {
@@ -96,13 +96,13 @@ type connectionStatus struct {
 }
 
 // TODO(pb): rename as Make
-func newConnectionStatus(c connection) connectionStatus {
+func newConnectionStatus(c Connection) connectionStatus {
 	return connectionStatus{
 		c.Remote().Name.String(),
 		c.Remote().NickName,
-		c.RemoteTCPAddr(),
-		c.Outbound(),
-		c.Established(),
+		c.remoteTCPAddress(),
+		c.isOutbound(),
+		c.isEstablished(),
 	}
 }
 
@@ -113,12 +113,12 @@ type unicastRouteStatus struct {
 
 // NewUnicastRouteStatusSlice takes a snapshot of the unicast routes in routes.
 // TODO(pb): unexport and rename as Make
-func newUnicastRouteStatusSlice(routes *Routes) []unicastRouteStatus {
-	routes.RLock()
-	defer routes.RUnlock()
+func newUnicastRouteStatusSlice(r *routes) []unicastRouteStatus {
+	r.RLock()
+	defer r.RUnlock()
 
 	var slice []unicastRouteStatus
-	for dest, via := range routes.unicast {
+	for dest, via := range r.unicast {
 		slice = append(slice, unicastRouteStatus{dest.String(), via.String()})
 	}
 	return slice
@@ -132,12 +132,12 @@ type broadcastRouteStatus struct {
 
 // NewBroadcastRouteStatusSlice takes a snapshot of the broadcast routes in routes.
 // TODO(pb): unexport and rename as Make
-func newBroadcastRouteStatusSlice(routes *Routes) []broadcastRouteStatus {
-	routes.RLock()
-	defer routes.RUnlock()
+func newBroadcastRouteStatusSlice(r *routes) []broadcastRouteStatus {
+	r.RLock()
+	defer r.RUnlock()
 
 	var slice []broadcastRouteStatus
-	for source, via := range routes.broadcast {
+	for source, via := range r.broadcast {
 		var hops []string
 		for _, hop := range via {
 			hops = append(hops, hop.String())
@@ -164,26 +164,26 @@ func newLocalConnectionStatusSlice(cm *connectionMaker) []LocalConnectionStatus 
 		var slice []LocalConnectionStatus
 		for conn := range cm.connections {
 			state := "pending"
-			if conn.Established() {
+			if conn.isEstablished() {
 				state = "established"
 			}
 			lc, _ := conn.(*LocalConnection)
 			info := fmt.Sprintf("%-6v %v", lc.OverlayConn.DisplayName(), conn.Remote())
-			if lc.Router.UsingPassword() {
-				if lc.Untrusted() {
+			if lc.router.usingPassword() {
+				if lc.untrusted() {
 					info = fmt.Sprintf("%-11v %v", "encrypted", info)
 				} else {
 					info = fmt.Sprintf("%-11v %v", "unencrypted", info)
 				}
 			}
-			slice = append(slice, LocalConnectionStatus{conn.RemoteTCPAddr(), conn.Outbound(), state, info})
+			slice = append(slice, LocalConnectionStatus{conn.remoteTCPAddress(), conn.isOutbound(), state, info})
 		}
 		for address, target := range cm.targets {
 			add := func(state, info string) {
 				slice = append(slice, LocalConnectionStatus{address, true, state, info})
 			}
 			switch target.state {
-			case TargetWaiting:
+			case targetWaiting:
 				until := "never"
 				if !target.tryAfter.IsZero() {
 					until = target.tryAfter.String()
@@ -193,13 +193,13 @@ func newLocalConnectionStatusSlice(cm *connectionMaker) []LocalConnectionStatus 
 				} else {
 					add("failed", target.lastError.Error()+", retry: "+until)
 				}
-			case TargetAttempting:
+			case targetAttempting:
 				if target.lastError == nil {
 					add("connecting", "")
 				} else {
 					add("retrying", target.lastError.Error())
 				}
-			case TargetConnected:
+			case targetConnected:
 			}
 		}
 		resultChan <- slice

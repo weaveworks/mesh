@@ -24,15 +24,15 @@ const (
 
 var (
 	// ProtocolBytes is the protocol identifier in byte-slice form.
-	ProtocolBytes = []byte(Protocol)
+	protocolBytes = []byte(Protocol)
 
 	// HeaderTimeout defines how long we're willing to wait for the handshake
 	// phase of protocol negotiation.
-	HeaderTimeout = 10 * time.Second
+	headerTimeout = 10 * time.Second
 
 	// ProtocolV1Features enumerate all of the version 1 features, so they may
 	// be special-cased the introduction phase. See filterV1Features.
-	ProtocolV1Features = []string{
+	protocolV1Features = []string{
 		"ConnID",
 		"Name",
 		"NickName",
@@ -42,11 +42,11 @@ var (
 
 	// ErrExpectedCrypto is returned by the handshake when this peer expects
 	// to do encryption, but remote peers do not.
-	ErrExpectedCrypto = fmt.Errorf("password specified, but peer requested an unencrypted connection")
+	errExpectedCrypto = fmt.Errorf("password specified, but peer requested an unencrypted connection")
 
 	// ErrExpectedNoCrypto is returned by the handshake when this peer does
 	// not expect to do encryption, but remote peers do.
-	ErrExpectedNoCrypto = fmt.Errorf("no password specificed, but peer requested an encrypted connection")
+	errExpectedNoCrypto = fmt.Errorf("no password specificed, but peer requested an encrypted connection")
 )
 
 // ProtocolIntroConn collect the parts of the net.TCPConn we require to do the
@@ -79,8 +79,8 @@ type protocolIntroParams struct {
 // ProtocolIntroResults capture the results from a successful protocol intro.
 type protocolIntroResults struct {
 	Features   map[string]string
-	Receiver   tCPReceiver
-	Sender     tCPSender
+	Receiver   tcpReceiver
+	Sender     tcpSender
 	SessionKey *[32]byte
 	Version    byte
 }
@@ -88,7 +88,7 @@ type protocolIntroResults struct {
 // DoIntro executes the protocol introduction.
 // TODO(pb): eliminate named return params?
 func (params protocolIntroParams) DoIntro() (res protocolIntroResults, err error) {
-	if err = params.Conn.SetDeadline(time.Now().Add(HeaderTimeout)); err != nil {
+	if err = params.Conn.SetDeadline(time.Now().Add(headerTimeout)); err != nil {
 		return
 	}
 
@@ -106,7 +106,7 @@ func (params protocolIntroParams) DoIntro() (res protocolIntroResults, err error
 	if err = params.Conn.SetWriteDeadline(time.Time{}); err != nil {
 		return
 	}
-	if err = params.Conn.SetReadDeadline(time.Now().Add(TCPHeartbeat * 2)); err != nil {
+	if err = params.Conn.SetReadDeadline(time.Now().Add(tcpHeartbeat * 2)); err != nil {
 		return
 	}
 
@@ -127,14 +127,14 @@ func (params protocolIntroParams) exchangeProtocolHeader() (byte, error) {
 	// deadlock.  The result channel is of size 1 so that the
 	// goroutine does not linger even if we encounter an error on
 	// the read side.
-	sendHeader := append(ProtocolBytes, params.MinVersion, params.MaxVersion)
+	sendHeader := append(protocolBytes, params.MinVersion, params.MaxVersion)
 	writeDone := make(chan error, 1)
 	go func() {
 		_, err := params.Conn.Write(sendHeader)
 		writeDone <- err
 	}()
 
-	header := make([]byte, len(ProtocolBytes)+2)
+	header := make([]byte, len(protocolBytes)+2)
 	if n, err := io.ReadFull(params.Conn, header); err != nil && n == 0 {
 		return 0, fmt.Errorf("failed to receive remote protocol header: %s", err)
 	} else if err != nil {
@@ -142,17 +142,17 @@ func (params protocolIntroParams) exchangeProtocolHeader() (byte, error) {
 			n, len(header), header[:n], err)
 	}
 
-	if !bytes.Equal(ProtocolBytes, header[:len(ProtocolBytes)]) {
-		return 0, fmt.Errorf("remote protocol header not recognised: %v", header[:len(ProtocolBytes)])
+	if !bytes.Equal(protocolBytes, header[:len(protocolBytes)]) {
+		return 0, fmt.Errorf("remote protocol header not recognised: %v", header[:len(protocolBytes)])
 	}
 
-	theirMinVersion := header[len(ProtocolBytes)]
+	theirMinVersion := header[len(protocolBytes)]
 	minVersion := theirMinVersion
 	if params.MinVersion > minVersion {
 		minVersion = params.MinVersion
 	}
 
-	theirMaxVersion := header[len(ProtocolBytes)+1]
+	theirMaxVersion := header[len(protocolBytes)+1]
 	maxVersion := theirMaxVersion
 	if maxVersion > params.MaxVersion {
 		maxVersion = params.MaxVersion
@@ -208,12 +208,12 @@ func (res *protocolIntroResults) doIntroV1(params protocolIntroParams, pubKey, p
 
 	if pubKey == nil {
 		if _, present := res.Features["PublicKey"]; present {
-			return ErrExpectedNoCrypto
+			return errExpectedNoCrypto
 		}
 	} else {
 		remotePubKeyStr, ok := res.Features["PublicKey"]
 		if !ok {
-			return ErrExpectedCrypto
+			return errExpectedCrypto
 		}
 
 		remotePubKey, err := hex.DecodeString(remotePubKeyStr)
@@ -233,7 +233,7 @@ func (res *protocolIntroResults) doIntroV1(params protocolIntroParams, pubKey, p
 // to be safe.
 func filterV1Features(intro map[string]string) map[string]string {
 	safe := make(map[string]string)
-	for _, k := range ProtocolV1Features {
+	for _, k := range protocolV1Features {
 		if val, ok := intro[k]; ok {
 			safe[k] = val
 		}
@@ -285,7 +285,7 @@ func (res *protocolIntroResults) doIntroV2(params protocolIntroParams, pubKey, p
 	switch rbuf[0] {
 	case 0:
 		if pubKey != nil {
-			return ErrExpectedCrypto
+			return errExpectedCrypto
 		}
 
 		res.Sender = newLengthPrefixTCPSender(params.Conn)
@@ -293,7 +293,7 @@ func (res *protocolIntroResults) doIntroV2(params protocolIntroParams, pubKey, p
 
 	case 1:
 		if pubKey == nil {
-			return ErrExpectedNoCrypto
+			return errExpectedNoCrypto
 		}
 
 		rbuf = make([]byte, len(pubKey))
@@ -371,12 +371,12 @@ const (
 )
 
 // ProtocolMsg combines a tag and encoded msg.
-type ProtocolMsg struct {
+type protocolMsg struct {
 	tag protocolTag
 	msg []byte
 }
 
 // ProtocolSender describes anything that can emit a ProtocolMsg on the wire.
 type protocolSender interface {
-	SendProtocolMsg(m ProtocolMsg) error
+	SendProtocolMsg(m protocolMsg) error
 }

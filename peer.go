@@ -13,13 +13,12 @@ import (
 // peers. By itself, it is a remote peer.
 type Peer struct {
 	Name PeerName
-	PeerSummary
+	peerSummary
 	localRefCount uint64 // maintained by Peers
-	connections   map[PeerName]connection
+	connections   map[PeerName]Connection
 }
 
-// PeerSummary is a collection of identifying information for a peer.
-type PeerSummary struct {
+type peerSummary struct {
 	NameByte   []byte
 	NickName   string
 	UID        PeerUID
@@ -28,24 +27,19 @@ type PeerSummary struct {
 	HasShortID bool
 }
 
-// ConnectionSet is an set of connection objects.
-type connectionSet map[connection]struct{}
+type connectionSet map[Connection]struct{}
 
-// NewPeerFromSummary constructs a new Peer object with no connections from
-// the provided summary.
-func newPeerFromSummary(summary PeerSummary) *Peer {
+func newPeerFromSummary(summary peerSummary) *Peer {
 	return &Peer{
 		Name:        PeerNameFromBin(summary.NameByte),
-		PeerSummary: summary,
-		connections: make(map[PeerName]connection),
+		peerSummary: summary,
+		connections: make(map[PeerName]Connection),
 	}
 }
 
-// NewPeer constructs a new Peer object with no connections from the provided
-// composite parts.
 func newPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortID PeerShortID) *Peer {
-	return newPeerFromSummary(PeerSummary{
-		NameByte:   name.Bin(),
+	return newPeerFromSummary(peerSummary{
+		NameByte:   name.bytes(),
 		NickName:   nickName,
 		UID:        uid,
 		Version:    version,
@@ -54,16 +48,8 @@ func newPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortI
 	})
 }
 
-// NewPeerPlaceholder constructs a partial Peer object with only the passed
-// name. Useful when we get a strange update from the mesh.
 func newPeerPlaceholder(name PeerName) *Peer {
-	return newPeerFromSummary(PeerSummary{NameByte: name.Bin()})
-}
-
-// NewPeerFrom constructs a new Peer object that is a copy of the passed peer.
-// Primarily used for tests.
-func newPeerFrom(peer *Peer) *Peer {
-	return newPeerFromSummary(peer.PeerSummary)
+	return newPeerFromSummary(peerSummary{NameByte: name.bytes()})
 }
 
 // String returns the peer name and nickname.
@@ -92,7 +78,7 @@ func (peer *Peer) String() string {
 //
 // NB: This function should generally be invoked while holding a read lock on
 // Peers and LocalPeer.
-func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
+func (peer *Peer) routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
 	routes := make(unicastRoutes)
 	routes[peer.Name] = UnknownPeerName
 	nextWorklist := []*Peer{peer}
@@ -104,7 +90,7 @@ func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 			if curPeer == stopAt {
 				return true, routes
 			}
-			curPeer.ForEachConnectedPeer(establishedAndSymmetric, routes,
+			curPeer.forEachConnectedPeer(establishedAndSymmetric, routes,
 				func(remotePeer *Peer) {
 					nextWorklist = append(nextWorklist, remotePeer)
 					remoteName := remotePeer.Name
@@ -128,16 +114,16 @@ func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 // connections will be selected. The exclude maps is treated as a set of
 // remote peers to blacklist.
 // TODO(pb): change exclude to map[PeerName]struct{}?
-func (peer *Peer) ForEachConnectedPeer(establishedAndSymmetric bool, exclude map[PeerName]PeerName, f func(*Peer)) {
+func (peer *Peer) forEachConnectedPeer(establishedAndSymmetric bool, exclude map[PeerName]PeerName, f func(*Peer)) {
 	for remoteName, conn := range peer.connections {
-		if establishedAndSymmetric && !conn.Established() {
+		if establishedAndSymmetric && !conn.isEstablished() {
 			continue
 		}
 		if _, found := exclude[remoteName]; found {
 			continue
 		}
 		remotePeer := conn.Remote()
-		if remoteConn, found := remotePeer.connections[peer.Name]; !establishedAndSymmetric || (found && remoteConn.Established()) {
+		if remoteConn, found := remotePeer.connections[peer.Name]; !establishedAndSymmetric || (found && remoteConn.isEstablished()) {
 			f(remotePeer)
 		}
 	}
@@ -170,10 +156,10 @@ type PeerShortID uint16
 
 // PeerShortIDBits is the usable bitsize of a PeerShortID.
 // TODO(pb): does this need to be exported?
-const PeerShortIDBits = 12
+const peerShortIDBits = 12
 
 func randomPeerShortID() PeerShortID {
-	return PeerShortID(randUint16() & (1<<PeerShortIDBits - 1))
+	return PeerShortID(randUint16() & (1<<peerShortIDBits - 1))
 }
 
 func randBytes(n int) []byte {

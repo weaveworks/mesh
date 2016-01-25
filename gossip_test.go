@@ -13,10 +13,12 @@ import (
 
 type mockGossipConnection struct {
 	remoteConnection
-	dest          *Router
-	gossipSenders *gossipSenders
-	start         chan struct{}
+	dest    *Router
+	senders *gossipSenders
+	start   chan struct{}
 }
+
+var _ gossipConnection = &mockGossipConnection{}
 
 func newTestRouter(name string) *Router {
 	peerName, _ := PeerNameFromString(name)
@@ -25,13 +27,13 @@ func newTestRouter(name string) *Router {
 	return router
 }
 
-func (conn *mockGossipConnection) SendProtocolMsg(protocolMsg ProtocolMsg) error {
+func (conn *mockGossipConnection) SendProtocolMsg(pm protocolMsg) error {
 	<-conn.start
-	return conn.dest.handleGossip(protocolMsg.tag, protocolMsg.msg)
+	return conn.dest.handleGossip(pm.tag, pm.msg)
 }
 
-func (conn *mockGossipConnection) GossipSenders() *gossipSenders {
-	return conn.gossipSenders
+func (conn *mockGossipConnection) gossipSenders() *gossipSenders {
+	return conn.senders
 }
 
 func (conn *mockGossipConnection) Start() {
@@ -49,23 +51,23 @@ func sendPendingGossip(routers ...*Router) {
 }
 
 func addTestGossipConnection(r1, r2 *Router) {
-	c1 := r1.NewTestGossipConnection(r2)
-	c2 := r2.NewTestGossipConnection(r1)
+	c1 := r1.newTestGossipConnection(r2)
+	c2 := r2.newTestGossipConnection(r1)
 	c1.Start()
 	c2.Start()
 }
 
-func (router *Router) NewTestGossipConnection(r *Router) *mockGossipConnection {
+func (router *Router) newTestGossipConnection(r *Router) *mockGossipConnection {
 	to := r.Ourself.Peer
 	toPeer := newPeer(to.Name, to.NickName, to.UID, 0, to.ShortID)
-	toPeer = router.Peers.FetchWithDefault(toPeer) // Has side-effect of incrementing refcount
+	toPeer = router.Peers.fetchWithDefault(toPeer) // Has side-effect of incrementing refcount
 
 	conn := &mockGossipConnection{
 		remoteConnection: remoteConnection{router.Ourself.Peer, toPeer, "", false, true},
 		dest:             r,
 		start:            make(chan struct{}),
 	}
-	conn.gossipSenders = newGossipSenders(conn, make(chan struct{}))
+	conn.senders = newGossipSenders(conn, make(chan struct{}))
 	router.Ourself.handleAddConnection(conn)
 	router.Ourself.handleConnectionEstablished(conn)
 	return conn
@@ -74,7 +76,7 @@ func (router *Router) NewTestGossipConnection(r *Router) *mockGossipConnection {
 func (router *Router) DeleteTestGossipConnection(r *Router) {
 	toName := r.Ourself.Peer.Name
 	conn, _ := router.Ourself.ConnectionTo(toName)
-	router.Peers.Dereference(conn.Remote())
+	router.Peers.dereference(conn.Remote())
 	router.Ourself.handleDeleteConnection(conn)
 }
 
@@ -83,7 +85,7 @@ func (router *Router) DeleteTestGossipConnection(r *Router) {
 // version information.
 func (router *Router) tp(routers ...*Router) *Peer {
 	peer := newPeerFrom(router.Ourself.Peer)
-	connections := make(map[PeerName]connection)
+	connections := make(map[PeerName]Connection)
 	for _, r := range routers {
 		p := newPeerFrom(r.Ourself.Peer)
 		connections[r.Ourself.Peer.Name] = newMockConnection(peer, p)
@@ -167,8 +169,8 @@ func TestGossipSurrogate(t *testing.T) {
 
 	// check that each end gets their message back through periodic
 	// gossip
-	r1.SendAllGossip()
-	r3.SendAllGossip()
+	r1.sendAllGossip()
+	r3.sendAllGossip()
 	sendPendingGossip(r1, r2, r3)
 	g1.checkHas(t, 1, 2)
 	g3.checkHas(t, 1, 2)

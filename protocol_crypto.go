@@ -17,7 +17,7 @@ import (
 // result in errors. This applies to the LengthPrefixTCP{Sender,Receiver} i.e.
 // V2 of the protocol.
 // TODO(pb): unexport
-const MaxTCPMsgSize = 10 * 1024 * 1024
+const maxTCPMsgSize = 10 * 1024 * 1024
 
 // GenerateKeyPair is used during encrypted protocol introduction.
 // TODO(pb): unexport
@@ -48,15 +48,15 @@ func formSessionKey(remotePublicKey, localPrivateKey *[32]byte, secretKey []byte
 // nonces are distinct from nonces used by overlay connections, if they share
 // the session key. This is a requirement of the NaCl Security Model; see
 // http://nacl.cr.yp.to/box.html.
-type tCPCryptoState struct {
+type tcpCryptoState struct {
 	sessionKey *[32]byte
 	nonce      [24]byte
 	seqNo      uint64
 }
 
 // NewTCPCryptoState returns a valid TCPCryptoState.
-func newTCPCryptoState(sessionKey *[32]byte, outbound bool) *tCPCryptoState {
-	s := &tCPCryptoState{sessionKey: sessionKey}
+func newTCPCryptoState(sessionKey *[32]byte, outbound bool) *tcpCryptoState {
+	s := &tcpCryptoState{sessionKey: sessionKey}
 	if outbound {
 		s.nonce[0] |= (1 << 7)
 	}
@@ -64,7 +64,7 @@ func newTCPCryptoState(sessionKey *[32]byte, outbound bool) *tCPCryptoState {
 	return s
 }
 
-func (s *tCPCryptoState) advance() {
+func (s *tcpCryptoState) advance() {
 	s.seqNo++
 	binary.BigEndian.PutUint64(s.nonce[16:24], s.seqNo)
 }
@@ -72,7 +72,7 @@ func (s *tCPCryptoState) advance() {
 // TCPSender describes anything that can send byte buffers.
 // It abstracts over the different protocol version senders.
 // TODO(pb): does this need to be exported?
-type tCPSender interface {
+type tcpSender interface {
 	Send([]byte) error
 }
 
@@ -107,8 +107,8 @@ func newLengthPrefixTCPSender(writer io.Writer) *lengthPrefixTCPSender {
 // uint32 before the msg. msgs larger than MaxTCPMsgSize are rejected.
 func (sender *lengthPrefixTCPSender) Send(msg []byte) error {
 	l := len(msg)
-	if l > MaxTCPMsgSize {
-		return fmt.Errorf("outgoing message exceeds maximum size: %d > %d", l, MaxTCPMsgSize)
+	if l > maxTCPMsgSize {
+		return fmt.Errorf("outgoing message exceeds maximum size: %d > %d", l, maxTCPMsgSize)
 	}
 	// We copy the message so we can send it in a single Write
 	// operation, thus making this thread-safe without locking.
@@ -123,12 +123,12 @@ func (sender *lengthPrefixTCPSender) Send(msg []byte) error {
 // with TCPCryptoState.
 type encryptedTCPSender struct {
 	sync.RWMutex
-	sender tCPSender
-	state  *tCPCryptoState
+	sender tcpSender
+	state  *tcpCryptoState
 }
 
 // NewEncryptedTCPSender returns a usable EncryptedTCPSender.
-func newEncryptedTCPSender(sender tCPSender, sessionKey *[32]byte, outbound bool) *encryptedTCPSender {
+func newEncryptedTCPSender(sender tcpSender, sessionKey *[32]byte, outbound bool) *encryptedTCPSender {
 	return &encryptedTCPSender{sender: sender, state: newTCPCryptoState(sessionKey, outbound)}
 }
 
@@ -144,7 +144,7 @@ func (sender *encryptedTCPSender) Send(msg []byte) error {
 // TCPReceiver describes anything that can receive byte buffers.
 // It abstracts over the different protocol version receivers.
 // TODO(pb): does this need to be exported?
-type tCPReceiver interface {
+type tcpReceiver interface {
 	Receive() ([]byte, error)
 }
 
@@ -187,8 +187,8 @@ func (receiver *lengthPrefixTCPReceiver) Receive() ([]byte, error) {
 		return nil, err
 	}
 	l := binary.BigEndian.Uint32(lenPrefix)
-	if l > MaxTCPMsgSize {
-		return nil, fmt.Errorf("incoming message exceeds maximum size: %d > %d", l, MaxTCPMsgSize)
+	if l > maxTCPMsgSize {
+		return nil, fmt.Errorf("incoming message exceeds maximum size: %d > %d", l, maxTCPMsgSize)
 	}
 	msg := make([]byte, l)
 	_, err := io.ReadFull(receiver.reader, msg)
@@ -199,12 +199,12 @@ func (receiver *lengthPrefixTCPReceiver) Receive() ([]byte, error) {
 // TCPCryptoState.
 // TODO(pb): unexport
 type encryptedTCPReceiver struct {
-	receiver tCPReceiver
-	state    *tCPCryptoState
+	receiver tcpReceiver
+	state    *tcpCryptoState
 }
 
 // NewEncryptedTCPReceiver returns a usable EncryptedTCPReceiver.
-func newEncryptedTCPReceiver(receiver tCPReceiver, sessionKey *[32]byte, outbound bool) *encryptedTCPReceiver {
+func newEncryptedTCPReceiver(receiver tcpReceiver, sessionKey *[32]byte, outbound bool) *encryptedTCPReceiver {
 	return &encryptedTCPReceiver{receiver: receiver, state: newTCPCryptoState(sessionKey, !outbound)}
 }
 

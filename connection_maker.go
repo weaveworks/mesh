@@ -11,16 +11,16 @@ import (
 const (
 	// InitialInterval is the lower bound on backoff between connection retries.
 	// TODO(pb): does this need to be exported?
-	InitialInterval = 2 * time.Second
+	initialInterval = 2 * time.Second
 
 	// MaxInterval is the upper bound on backoff between connection retries.
 	// TODO(pb): does this need to be exported?
-	MaxInterval = 6 * time.Minute
+	maxInterval = 6 * time.Minute
 
 	// ResetAfter is the time after which a connection waiting for a retry is
 	// immediately retried.
 	// TODO(pb): does this need to be exported?
-	ResetAfter = 1 * time.Minute
+	resetAfter = 1 * time.Minute
 )
 
 type peerAddrs map[string]*net.TCPAddr
@@ -31,8 +31,8 @@ type connectionMaker struct {
 	peers       *Peers
 	port        int
 	discovery   bool
-	targets     map[string]*Target
-	connections map[connection]struct{}
+	targets     map[string]*target
+	connections map[Connection]struct{}
 	directPeers peerAddrs
 	actionChan  chan<- connectionMakerAction
 }
@@ -44,19 +44,19 @@ type targetState int
 const (
 	// TargetWaiting means we are waiting to connect there.
 	// TODO(pb): does this need to be exported?
-	TargetWaiting targetState = iota
+	targetWaiting targetState = iota
 
 	// TargetAttempting means we are attempting to connect there.
 	// TODO(pb): does this need to be exported?
-	TargetAttempting
+	targetAttempting
 
 	// TargetConnected means we are connected to there.
 	// TODO(pb): does this need to be exported?
-	TargetConnected
+	targetConnected
 )
 
 // Target contains information about an address where we may find a peer.
-type Target struct {
+type target struct {
 	state       targetState
 	lastError   error         // reason for disconnection last time
 	tryAfter    time.Time     // next time to try this address
@@ -80,8 +80,8 @@ func newConnectionMaker(ourself *localPeer, peers *Peers, port int, discovery bo
 		port:        port,
 		discovery:   discovery,
 		directPeers: peerAddrs{},
-		targets:     make(map[string]*Target),
-		connections: make(map[connection]struct{}),
+		targets:     make(map[string]*target),
+		connections: make(map[Connection]struct{}),
 		actionChan:  actionChan,
 	}
 	go cm.queryLoop(actionChan)
@@ -141,7 +141,7 @@ func (cm *connectionMaker) ForgetConnections(peers []string) {
 func (cm *connectionMaker) ConnectionAborted(address string, err error) {
 	cm.actionChan <- func() bool {
 		target := cm.targets[address]
-		target.state = TargetWaiting
+		target.state = targetWaiting
 		target.lastError = err
 		target.nextTryLater()
 		return true
@@ -152,12 +152,12 @@ func (cm *connectionMaker) ConnectionAborted(address string, err error) {
 // identified by conn.RemoteTCPAddr() as established, and puts it in the
 // TargetConnected state.
 // TODO(pb): does this need to be exported?
-func (cm *connectionMaker) ConnectionCreated(conn connection) {
+func (cm *connectionMaker) ConnectionCreated(conn Connection) {
 	cm.actionChan <- func() bool {
 		cm.connections[conn] = struct{}{}
-		if conn.Outbound() {
-			target := cm.targets[conn.RemoteTCPAddr()]
-			target.state = TargetConnected
+		if conn.isOutbound() {
+			target := cm.targets[conn.remoteTCPAddress()]
+			target.state = targetConnected
 		}
 		return false
 	}
@@ -166,17 +166,17 @@ func (cm *connectionMaker) ConnectionCreated(conn connection) {
 // ConnectionTerminated unregisters the passed connection, and marks the
 // target identified by conn.RemoteTCPAddr() as Waiting.
 // TODO(pb): does this need to be exported?
-func (cm *connectionMaker) ConnectionTerminated(conn connection, err error) {
+func (cm *connectionMaker) ConnectionTerminated(conn Connection, err error) {
 	cm.actionChan <- func() bool {
 		delete(cm.connections, conn)
-		if conn.Outbound() {
-			target := cm.targets[conn.RemoteTCPAddr()]
-			target.state = TargetWaiting
+		if conn.isOutbound() {
+			target := cm.targets[conn.remoteTCPAddress()]
+			target.state = targetWaiting
 			target.lastError = err
 			switch {
-			case err == ErrConnectToSelf:
+			case err == errConnectToSelf:
 				target.nextTryNever()
-			case time.Now().After(target.tryAfter.Add(ResetAfter)):
+			case time.Now().After(target.tryAfter.Add(resetAfter)):
 				target.nextTryNow()
 			default:
 				target.nextTryLater()
@@ -196,7 +196,7 @@ func (cm *connectionMaker) Refresh() {
 
 // TODO(pb): probably don't need to paramaterize actionChan
 func (cm *connectionMaker) queryLoop(actionChan <-chan connectionMakerAction) {
-	timer := time.NewTimer(MaxDuration)
+	timer := time.NewTimer(maxDuration)
 	run := func() { timer.Reset(cm.checkStateAndAttemptConnections()) }
 	for {
 		select {
@@ -232,9 +232,9 @@ func (cm *connectionMaker) checkStateAndAttemptConnections() time.Duration {
 		if _, found := cm.targets[address]; found {
 			return
 		}
-		target := &Target{state: TargetWaiting}
-		target.nextTryNow()
-		cm.targets[address] = target
+		tgt := &target{state: targetWaiting}
+		tgt.nextTryNow()
+		cm.targets[address] = tgt
 	}
 
 	// Add direct targets that are not connected
@@ -271,10 +271,10 @@ func (cm *connectionMaker) ourConnections() (peerNameSet, map[string]struct{}, m
 		ourInboundIPs       = make(map[string]struct{})
 	)
 	for conn := range cm.connections {
-		address := conn.RemoteTCPAddr()
+		address := conn.remoteTCPAddress()
 		ourConnectedPeers[conn.Remote().Name] = struct{}{}
 		ourConnectedTargets[address] = struct{}{}
-		if conn.Outbound() {
+		if conn.isOutbound() {
 			continue
 		}
 		if ip, _, err := net.SplitHostPort(address); err == nil { // should always succeed
@@ -285,7 +285,7 @@ func (cm *connectionMaker) ourConnections() (peerNameSet, map[string]struct{}, m
 }
 
 func (cm *connectionMaker) addPeerTargets(ourConnectedPeers peerNameSet, addTarget func(string)) {
-	cm.peers.ForEach(func(peer *Peer) {
+	cm.peers.forEach(func(peer *Peer) {
 		if peer == cm.ourself.Peer {
 			return
 		}
@@ -299,8 +299,8 @@ func (cm *connectionMaker) addPeerTargets(ourConnectedPeers peerNameSet, addTarg
 			if _, connected := ourConnectedPeers[otherPeer]; connected {
 				continue
 			}
-			address := conn.RemoteTCPAddr()
-			if conn.Outbound() {
+			address := conn.remoteTCPAddress()
+			if conn.isOutbound() {
 				addTarget(address)
 			} else if ip, _, err := net.SplitHostPort(address); err == nil {
 				// There is no point connecting to the (likely
@@ -315,9 +315,9 @@ func (cm *connectionMaker) addPeerTargets(ourConnectedPeers peerNameSet, addTarg
 
 func (cm *connectionMaker) connectToTargets(validTarget map[string]struct{}, directTarget map[string]struct{}) time.Duration {
 	now := time.Now() // make sure we catch items just added
-	after := MaxDuration
+	after := maxDuration
 	for address, target := range cm.targets {
-		if target.state != TargetWaiting {
+		if target.state != targetWaiting {
 			continue
 		}
 		if _, valid := validTarget[address]; !valid {
@@ -329,7 +329,7 @@ func (cm *connectionMaker) connectToTargets(validTarget map[string]struct{}, dir
 		}
 		switch duration := target.tryAfter.Sub(now); {
 		case duration <= 0:
-			target.state = TargetAttempting
+			target.state = targetAttempting
 			_, isCmdLineTarget := directTarget[address]
 			go cm.attemptConnection(address, isCmdLineTarget)
 		case duration < after:
@@ -347,22 +347,22 @@ func (cm *connectionMaker) attemptConnection(address string, acceptNewPeer bool)
 	}
 }
 
-func (t *Target) nextTryNever() {
+func (t *target) nextTryNever() {
 	t.tryAfter = time.Time{}
-	t.tryInterval = MaxInterval
+	t.tryInterval = maxInterval
 }
 
-func (t *Target) nextTryNow() {
+func (t *target) nextTryNow() {
 	t.tryAfter = time.Now()
-	t.tryInterval = InitialInterval
+	t.tryInterval = initialInterval
 }
 
 // The delay at the nth retry is a random value in the range
 // [i-i/2,i+i/2], where i = InitialInterval * 1.5^(n-1).
-func (t *Target) nextTryLater() {
+func (t *target) nextTryLater() {
 	t.tryAfter = time.Now().Add(t.tryInterval/2 + time.Duration(rand.Int63n(int64(t.tryInterval))))
 	t.tryInterval = t.tryInterval * 3 / 2
-	if t.tryInterval > MaxInterval {
-		t.tryInterval = MaxInterval
+	if t.tryInterval > maxInterval {
+		t.tryInterval = maxInterval
 	}
 }

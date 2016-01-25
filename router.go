@@ -21,16 +21,16 @@ const (
 
 	// TCPHeartbeat is how often a mesh connection will heartbeat.
 	// TODO(pb): this should either not be exported, or made var
-	TCPHeartbeat = 30 * time.Second
+	tcpHeartbeat = 30 * time.Second
 
 	// GossipInterval is how often peers will broadcast their accumulated
 	// gossip.
 	// TODO(pb): this should either not be exported, or made var
-	GossipInterval = 30 * time.Second
+	gossipInterval = 30 * time.Second
 
 	// MaxDuration is a stand-in for forever.
 	// TODO(pb): this should not be exported
-	MaxDuration = time.Duration(math.MaxInt64)
+	maxDuration = time.Duration(math.MaxInt64)
 
 	// Capacity of token bucket for rate limiting accepts.
 	acceptMaxTokens = 100
@@ -57,11 +57,11 @@ type Router struct {
 	Overlay         Overlay
 	Ourself         *localPeer
 	Peers           *Peers
-	Routes          *Routes
+	Routes          *routes
 	ConnectionMaker *connectionMaker
 	gossipLock      sync.RWMutex
 	gossipChannels  gossipChannels
-	TopologyGossip  Gossip
+	topologyGossip  Gossip
 	acceptLimiter   *tokenBucket
 }
 
@@ -81,7 +81,7 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay) *
 	})
 	router.Routes = newRoutes(router.Ourself, router.Peers)
 	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, router.Port, router.PeerDiscovery)
-	router.TopologyGossip = router.NewGossip("topology", router)
+	router.topologyGossip = router.NewGossip("topology", router)
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
 
 	return router
@@ -101,7 +101,7 @@ func (router *Router) Stop() error {
 
 // UsingPassword returns true if a password is set.
 // Passwords are used to establish encrypted connections.
-func (router *Router) UsingPassword() bool {
+func (router *Router) usingPassword() bool {
 	return router.Password != nil
 }
 
@@ -135,7 +135,144 @@ func (router *Router) acceptTCP(tcpConn *net.TCPConn) {
 	startLocalConnection(connRemote, tcpConn, router, true)
 }
 
-// Gossiper methods - the Router is the topology Gossiper
+// NewGossip constructs and returns a usable GossipChannel from the router.
+// TODO(pb): rename?
+// TODO(pb): move all of these methods to router.go
+func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
+	channel := newGossipChannel(channelName, router.Ourself, router.Routes, g)
+	router.gossipLock.Lock()
+	defer router.gossipLock.Unlock()
+	if _, found := router.gossipChannels[channelName]; found {
+		log.Fatalf("[gossip] duplicate channel %s", channelName)
+	}
+	router.gossipChannels[channelName] = channel
+	return channel
+}
+
+func (router *Router) gossipChannel(channelName string) *gossipChannel {
+	router.gossipLock.RLock()
+	channel, found := router.gossipChannels[channelName]
+	router.gossipLock.RUnlock()
+	if found {
+		return channel
+	}
+	router.gossipLock.Lock()
+	defer router.gossipLock.Unlock()
+	if channel, found = router.gossipChannels[channelName]; found {
+		return channel
+	}
+	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{})
+	channel.log("created surrogate channel")
+	router.gossipChannels[channelName] = channel
+	return channel
+}
+
+func (router *Router) gossipChannelSet() map[*gossipChannel]struct{} {
+	channels := make(map[*gossipChannel]struct{})
+	router.gossipLock.RLock()
+	defer router.gossipLock.RUnlock()
+	for _, channel := range router.gossipChannels {
+		channels[channel] = struct{}{}
+	}
+	return channels
+}
+
+// SendAllGossip relays all pending gossip data for each channel via random
+// neighbours.
+func (router *Router) sendAllGossip() {
+	for channel := range router.gossipChannelSet() {
+		if gossip := channel.gossiper.Gossip(); gossip != nil {
+			channel.Send(gossip)
+		}
+	}
+}
+
+// SendAllGossipDown relays all pending gossip data for each channel via conn.
+func (router *Router) sendAllGossipDown(conn Connection) {
+	for channel := range router.gossipChannelSet() {
+		if gossip := channel.gossiper.Gossip(); gossip != nil {
+			channel.SendDown(conn, gossip)
+		}
+	}
+}
+
+// for testing
+func (router *Router) sendPendingGossip() bool {
+	sentSomething := false
+	for conn := range router.Ourself.Connections() {
+		sentSomething = conn.(gossipConnection).gossipSenders().Flush() || sentSomething
+	}
+	return sentSomething
+}
+
+// BroadcastTopologyUpdate is invoked whenever there is a change to the mesh
+// topology, and broadcasts the new set of peers to the mesh.
+func (router *Router) broadcastTopologyUpdate(update []*Peer) {
+	names := make(peerNameSet)
+	for _, p := range update {
+		names[p.Name] = struct{}{}
+	}
+	router.topologyGossip.GossipBroadcast(&topologyGossipData{peers: router.Peers, update: names})
+}
+
+// OnGossipUnicast implements Gossiper, but always returns an error, as a
+// router should only receive gossip broadcasts of TopologyGossipData.
+func (router *Router) OnGossipUnicast(sender PeerName, msg []byte) error {
+	return fmt.Errorf("unexpected topology gossip unicast: %v", msg)
+}
+
+// OnGossipBroadcast receives broadcasts of TopologyGossipData.
+// It returns the received update unchanged.
+func (router *Router) OnGossipBroadcast(_ PeerName, update []byte) (GossipData, error) {
+	origUpdate, _, err := router.applyTopologyUpdate(update)
+	if err != nil || len(origUpdate) == 0 {
+		return nil, err
+	}
+	return &topologyGossipData{peers: router.Peers, update: origUpdate}, nil
+}
+
+// Gossip yields the current topology as GossipData.
+func (router *Router) Gossip() GossipData {
+	return &topologyGossipData{peers: router.Peers, update: router.Peers.names()}
+}
+
+// OnGossip receives broadcasts of TopologyGossipData.
+// It returns an "improved" version of the received update.
+// See peers.ApplyUpdate.
+func (router *Router) OnGossip(update []byte) (GossipData, error) {
+	_, newUpdate, err := router.applyTopologyUpdate(update)
+	if err != nil || len(newUpdate) == 0 {
+		return nil, err
+	}
+	return &topologyGossipData{peers: router.Peers, update: newUpdate}, nil
+}
+
+func (router *Router) applyTopologyUpdate(update []byte) (peerNameSet, peerNameSet, error) {
+	origUpdate, newUpdate, err := router.Peers.applyUpdate(update)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(newUpdate) > 0 {
+		router.ConnectionMaker.Refresh()
+		router.Routes.Recalculate()
+	}
+	return origUpdate, newUpdate, nil
+}
+
+// Trusts returns true if the remote connection is in a trusted subnet.
+func (router *Router) trusts(remote *remoteConnection) bool {
+	if tcpAddr, err := net.ResolveTCPAddr("tcp4", remote.remoteTCPAddr); err == nil {
+		for _, trustedSubnet := range router.TrustedSubnets {
+			if trustedSubnet.Contains(tcpAddr.IP) {
+				return true
+			}
+		}
+	} else {
+		// Should not happen as remoteTCPAddr was obtained from TCPConn
+		log.Printf("Unable to parse remote TCP addr: %s", err)
+	}
+	return false
+}
 
 // TopologyGossipData is the set of peers in the mesh network.
 // It is gossiped just like anything else.
@@ -158,74 +295,5 @@ func (d *topologyGossipData) Merge(other GossipData) GossipData {
 
 // Encode implements GossipData.
 func (d *topologyGossipData) Encode() [][]byte {
-	return [][]byte{d.peers.EncodePeers(d.update)}
-}
-
-// BroadcastTopologyUpdate is invoked whenever there is a change to the mesh
-// topology, and broadcasts the new set of peers to the mesh.
-func (router *Router) BroadcastTopologyUpdate(update []*Peer) {
-	names := make(peerNameSet)
-	for _, p := range update {
-		names[p.Name] = struct{}{}
-	}
-	router.TopologyGossip.GossipBroadcast(&topologyGossipData{peers: router.Peers, update: names})
-}
-
-// OnGossipUnicast implements Gossiper, but always returns an error, as a
-// router should only receive gossip broadcasts of TopologyGossipData.
-func (router *Router) OnGossipUnicast(sender PeerName, msg []byte) error {
-	return fmt.Errorf("unexpected topology gossip unicast: %v", msg)
-}
-
-// OnGossipBroadcast receives broadcasts of TopologyGossipData.
-// It returns the received update unchanged.
-func (router *Router) OnGossipBroadcast(_ PeerName, update []byte) (GossipData, error) {
-	origUpdate, _, err := router.applyTopologyUpdate(update)
-	if err != nil || len(origUpdate) == 0 {
-		return nil, err
-	}
-	return &topologyGossipData{peers: router.Peers, update: origUpdate}, nil
-}
-
-// Gossip yields the current topology as GossipData.
-func (router *Router) Gossip() GossipData {
-	return &topologyGossipData{peers: router.Peers, update: router.Peers.Names()}
-}
-
-// OnGossip receives broadcasts of TopologyGossipData.
-// It returns an "improved" version of the received update.
-// See peers.ApplyUpdate.
-func (router *Router) OnGossip(update []byte) (GossipData, error) {
-	_, newUpdate, err := router.applyTopologyUpdate(update)
-	if err != nil || len(newUpdate) == 0 {
-		return nil, err
-	}
-	return &topologyGossipData{peers: router.Peers, update: newUpdate}, nil
-}
-
-func (router *Router) applyTopologyUpdate(update []byte) (peerNameSet, peerNameSet, error) {
-	origUpdate, newUpdate, err := router.Peers.ApplyUpdate(update)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(newUpdate) > 0 {
-		router.ConnectionMaker.Refresh()
-		router.Routes.Recalculate()
-	}
-	return origUpdate, newUpdate, nil
-}
-
-// Trusts returns true if the remote connection is in a trusted subnet.
-func (router *Router) Trusts(remote *remoteConnection) bool {
-	if tcpAddr, err := net.ResolveTCPAddr("tcp4", remote.remoteTCPAddr); err == nil {
-		for _, trustedSubnet := range router.TrustedSubnets {
-			if trustedSubnet.Contains(tcpAddr.IP) {
-				return true
-			}
-		}
-	} else {
-		// Should not happen as remoteTCPAddr was obtained from TCPConn
-		log.Printf("Unable to parse remote TCP addr: %s", err)
-	}
-	return false
+	return [][]byte{d.peers.encodePeers(d.update)}
 }
