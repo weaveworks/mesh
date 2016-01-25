@@ -10,16 +10,28 @@ import (
 )
 
 const (
-	Protocol           = "weave"
+	// Protocol identifies a sort of major version of the protocol.
+	Protocol = "weave"
+
+	// ProtocolMinVersion establishes the lowest protocol version among peers
+	// that we're willing to try to communicate with.
 	ProtocolMinVersion = 1
+
+	// ProtocolMaxVersion establishes the highest protocol version among peers
+	// that we're willing to try to communicate with.
 	ProtocolMaxVersion = 2
 )
 
 var (
+	// ProtocolBytes is the protocol identifier in byte-slice form.
 	ProtocolBytes = []byte(Protocol)
 
+	// HeaderTimeout defines how long we're willing to wait for the handshake
+	// phase of protocol negotiation.
 	HeaderTimeout = 10 * time.Second
 
+	// ProtocolV1Features enumerate all of the version 1 features, so they may
+	// be special-cased the introduction phase. See filterV1Features.
 	ProtocolV1Features = []string{
 		"ConnID",
 		"Name",
@@ -28,12 +40,18 @@ var (
 		"UID",
 	}
 
-	ErrExpectedCrypto   = fmt.Errorf("Password specified, but peer requested an unencrypted connection")
-	ErrExpectedNoCrypto = fmt.Errorf("No password specificed, but peer requested an encrypted connection")
+	// ErrExpectedCrypto is returned by the handshake when this peer expects
+	// to do encryption, but remote peers do not.
+	ErrExpectedCrypto = fmt.Errorf("password specified, but peer requested an unencrypted connection")
+
+	// ErrExpectedNoCrypto is returned by the handshake when this peer does
+	// not expect to do encryption, but remote peers do.
+	ErrExpectedNoCrypto = fmt.Errorf("no password specificed, but peer requested an encrypted connection")
 )
 
-// We don't need the full net.TCPConn to do the protocol intro.  This
-// interface contains just the parts we do need, to support testing
+// ProtocolIntroConn collect the parts of the net.TCPConn we require to do the
+// protocol intro, to support testing.
+// TODO(pb): does this need to be exported?
 type ProtocolIntroConn interface {
 	// io.Reader
 	Read(b []byte) (n int, err error)
@@ -47,6 +65,8 @@ type ProtocolIntroConn interface {
 	SetWriteDeadline(t time.Time) error
 }
 
+// ProtocolIntroParams capture the params necessary to negotiate a protocol
+// intro with a remote peer.
 type ProtocolIntroParams struct {
 	MinVersion byte
 	MaxVersion byte
@@ -56,6 +76,7 @@ type ProtocolIntroParams struct {
 	Outbound   bool
 }
 
+// ProtocolIntroResults capture the results from a successful protocol intro.
 type ProtocolIntroResults struct {
 	Features   map[string]string
 	Receiver   TCPReceiver
@@ -64,6 +85,8 @@ type ProtocolIntroResults struct {
 	Version    byte
 }
 
+// DoIntro executes the protocol introduction.
+// TODO(pb): eliminate named return params?
 func (params ProtocolIntroParams) DoIntro() (res ProtocolIntroResults, err error) {
 	if err = params.Conn.SetDeadline(time.Now().Add(HeaderTimeout)); err != nil {
 		return
@@ -325,24 +348,35 @@ func (res *ProtocolIntroResults) setupCrypto(params ProtocolIntroParams, remoteP
 	res.Receiver = NewEncryptedTCPReceiver(res.Receiver, res.SessionKey, params.Outbound)
 }
 
+// ProtocolTag identifies the type of msg encoded in a ProtocolMsg.
 type ProtocolTag byte
 
 const (
+	// ProtocolHeartbeat identifies a heartbeat msg.
 	ProtocolHeartbeat = iota
-	ProtocolReserved1 // legacy overlay control messages
-	ProtocolReserved2 //
-	ProtocolReserved3 //
+	// ProtocolReserved1 is a legacy overly control message.
+	ProtocolReserved1
+	// ProtocolReserved2 is a legacy overly control message.
+	ProtocolReserved2
+	// ProtocolReserved3 is a legacy overly control message.
+	ProtocolReserved3
+	// ProtocolGossip identifies a pure gossip msg.
 	ProtocolGossip
+	// ProtocolGossipUnicast identifies a gossip (unicast) msg.
 	ProtocolGossipUnicast
+	// ProtocolGossipBroadcast identifies a gossip (broadcast) msg.
 	ProtocolGossipBroadcast
+	// ProtocolOverlayControlMsg identifies a control msg.
 	ProtocolOverlayControlMsg
 )
 
+// ProtocolMsg combines a tag and encoded msg.
 type ProtocolMsg struct {
 	tag ProtocolTag
 	msg []byte
 }
 
+// ProtocolSender describes anything that can emit a ProtocolMsg on the wire.
 type ProtocolSender interface {
 	SendProtocolMsg(m ProtocolMsg) error
 }

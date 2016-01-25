@@ -1,12 +1,15 @@
 package mesh
 
 import (
+	"encoding/gob"
 	"fmt"
 	"net"
 	"sync"
 	"time"
 )
 
+// LocalPeer is the only "active" peer in the mesh. It extends Peer with
+// additional behaviors, mostly to retrieve and manage connection state.
 type LocalPeer struct {
 	sync.RWMutex
 	*Peer
@@ -14,8 +17,11 @@ type LocalPeer struct {
 	actionChan chan<- LocalPeerAction
 }
 
+// LocalPeerAction is the actor closure used by LocalPeer.
+// TODO(pb): does this need to be exported?
 type LocalPeerAction func()
 
+// NewLocalPeer returns a usable LocalPeer.
 func NewLocalPeer(name PeerName, nickName string, router *Router) *LocalPeer {
 	actionChan := make(chan LocalPeerAction, ChannelSize)
 	peer := &LocalPeer{
@@ -27,6 +33,7 @@ func NewLocalPeer(name PeerName, nickName string, router *Router) *LocalPeer {
 	return peer
 }
 
+// Connections returns all the connections that the local peer is aware of.
 func (peer *LocalPeer) Connections() ConnectionSet {
 	connections := make(ConnectionSet)
 	peer.RLock()
@@ -37,6 +44,7 @@ func (peer *LocalPeer) Connections() ConnectionSet {
 	return connections
 }
 
+// ConnectionTo returns the connection to the named peer, if any.
 func (peer *LocalPeer) ConnectionTo(name PeerName) (Connection, bool) {
 	peer.RLock()
 	defer peer.RUnlock()
@@ -44,6 +52,7 @@ func (peer *LocalPeer) ConnectionTo(name PeerName) (Connection, bool) {
 	return conn, found // yes, you really can't inline that. FFS.
 }
 
+// ConnectionsTo returns all known connections to the named peers.
 func (peer *LocalPeer) ConnectionsTo(names []PeerName) []Connection {
 	if len(names) == 0 {
 		return nil
@@ -61,6 +70,8 @@ func (peer *LocalPeer) ConnectionsTo(names []PeerName) []Connection {
 	return conns
 }
 
+// CreateConnection creates a new connection to peerAddr. If acceptNewPeer is
+// false, peerAddr must already be a member of the mesh.
 func (peer *LocalPeer) CreateConnection(peerAddr string, acceptNewPeer bool) error {
 	if err := peer.checkConnectionLimit(); err != nil {
 		return err
@@ -80,7 +91,7 @@ func (peer *LocalPeer) CreateConnection(peerAddr string, acceptNewPeer bool) err
 
 // ACTOR client API
 
-// Sync.
+// AddConnection adds the connection to the peer. Synchronous.
 func (peer *LocalPeer) AddConnection(conn *LocalConnection) error {
 	resultChan := make(chan error)
 	peer.actionChan <- func() {
@@ -89,14 +100,15 @@ func (peer *LocalPeer) AddConnection(conn *LocalConnection) error {
 	return <-resultChan
 }
 
-// Async.
+// ConnectionEstablished marks the connection as established within the peer.
+// Asynchronous.
 func (peer *LocalPeer) ConnectionEstablished(conn *LocalConnection) {
 	peer.actionChan <- func() {
 		peer.handleConnectionEstablished(conn)
 	}
 }
 
-// Sync.
+// DeleteConnection removes the connection from the peer. Synchronous.
 func (peer *LocalPeer) DeleteConnection(conn *LocalConnection) {
 	resultChan := make(chan interface{})
 	peer.actionChan <- func() {
@@ -104,6 +116,13 @@ func (peer *LocalPeer) DeleteConnection(conn *LocalConnection) {
 		resultChan <- nil
 	}
 	<-resultChan
+}
+
+// Encode writes the peer to the encoder.
+func (peer *LocalPeer) Encode(enc *gob.Encoder) {
+	peer.RLock()
+	defer peer.RUnlock()
+	peer.Peer.Encode(enc)
 }
 
 // ACTOR server

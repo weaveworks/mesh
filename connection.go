@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// Connection is the commonality of LocalConnection and RemoteConnection.
+// TODO(pb): does this need to be exported?
 type Connection interface {
 	Local() *Peer
 	Remote() *Peer
@@ -19,16 +21,31 @@ type Connection interface {
 	Log(args ...interface{})
 }
 
+// ConnectionTieBreak describes the outcome of a tiebreaking contest between
+// two connections.
+// TODO(pb): does this need to be exported?
 type ConnectionTieBreak int
 
 const (
+	// TieBreakWon indicates the candidate has won the tiebreak.
+	// TODO(pb): does this need to be exported?
 	TieBreakWon ConnectionTieBreak = iota
+
+	// TieBreakLost indicates the candidate has lost the tiebreak.
+	// TODO(pb): does this need to be exported?
 	TieBreakLost
+
+	// TieBreakTied indicates the tiebreaking contest had no winner.
+	// TODO(pb): does this need to be exported?
 	TieBreakTied
 )
 
+// TODO(pb): does this need to be exported?
 var ErrConnectToSelf = fmt.Errorf("Cannot connect to ourself")
 
+// RemoteConnection is a local representation of the remote side of a
+// connection. It has limited capabilities compared to LocalConnection.
+// TODO(pb): does this need to be exported?
 type RemoteConnection struct {
 	local         *Peer
 	remote        *Peer
@@ -37,6 +54,9 @@ type RemoteConnection struct {
 	established   bool
 }
 
+// LocalConnection is the local side of a connection. It implements
+// ProtocolSender, and manages per-channel GossipSenders.
+// TODO(pb): does this need to be exported?
 type LocalConnection struct {
 	sync.RWMutex
 	RemoteConnection
@@ -56,12 +76,19 @@ type LocalConnection struct {
 	gossipSenders   *GossipSenders
 }
 
+// GossipConnection describes something that can yield multiple GossipSenders.
+// TODO(pb): does this need to be exported?
 type GossipConnection interface {
 	GossipSenders() *GossipSenders
 }
 
+// ConnectionAction is the actor closure used by LocalConnection. If an action
+// returns an error, it will terminate the actor loop, which terminates the
+// connection in turn.
+// TODO(pb): does this need to be exported?
 type ConnectionAction func() error
 
+// NewRemoteConnection returns a usable RemoteConnection.
 func NewRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, established bool) *RemoteConnection {
 	return &RemoteConnection{
 		local:         from,
@@ -72,24 +99,39 @@ func NewRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, establis
 	}
 }
 
-func (conn *RemoteConnection) Local() *Peer                           { return conn.local }
-func (conn *RemoteConnection) Remote() *Peer                          { return conn.remote }
-func (conn *RemoteConnection) RemoteTCPAddr() string                  { return conn.remoteTCPAddr }
-func (conn *RemoteConnection) Outbound() bool                         { return conn.outbound }
-func (conn *RemoteConnection) Established() bool                      { return conn.established }
-func (conn *RemoteConnection) BreakTie(Connection) ConnectionTieBreak { return TieBreakTied }
-func (conn *RemoteConnection) Shutdown(error)                         {}
+// Local implements Connection.
+func (conn *RemoteConnection) Local() *Peer { return conn.local }
 
+// Remote implements Connection.
+func (conn *RemoteConnection) Remote() *Peer { return conn.remote }
+
+// RemoteTCPAddr implements Connection.
+func (conn *RemoteConnection) RemoteTCPAddr() string { return conn.remoteTCPAddr }
+
+// Outbound implements Connection.
+func (conn *RemoteConnection) Outbound() bool { return conn.outbound }
+
+// Established implements Connection.
+func (conn *RemoteConnection) Established() bool { return conn.established }
+
+// BreakTie implements Connection.
+func (conn *RemoteConnection) BreakTie(Connection) ConnectionTieBreak { return TieBreakTied }
+
+// Shutdown implements Connection.
+func (conn *RemoteConnection) Shutdown(error) {}
+
+// Log implements Connection.
 func (conn *RemoteConnection) Log(args ...interface{}) {
 	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
+// ErrorLog is the same as log. TODO(pb): remove.
 func (conn *RemoteConnection) ErrorLog(args ...interface{}) {
 	log.Errorln(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
-// Does not return anything. If the connection is successful, it will
-// end up in the local peer's connections map.
+// StartLocalConnection does not return anything. If the connection is
+// successful, it will end up in the local peer's connections map.
 func StartLocalConnection(connRemote *RemoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool) {
 	if connRemote.local != router.Ourself.Peer {
 		log.Fatal("Attempt to create local connection from a peer which is not ourself")
@@ -105,11 +147,13 @@ func StartLocalConnection(connRemote *RemoteConnection, tcpConn *net.TCPConn, ro
 		uid:              randUint64(),
 		actionChan:       actionChan,
 		errorChan:        errorChan,
-		finished:         finished}
+		finished:         finished,
+	}
 	conn.gossipSenders = NewGossipSenders(conn, finished)
 	go conn.run(actionChan, errorChan, finished, acceptNewPeer)
 }
 
+// BreakTie conducts a tiebreaking contest between two connections.
 func (conn *LocalConnection) BreakTie(dupConn Connection) ConnectionTieBreak {
 	dupConnLocal := dupConn.(*LocalConnection)
 	// conn.uid is used as the tie breaker here, in the knowledge that
@@ -118,15 +162,17 @@ func (conn *LocalConnection) BreakTie(dupConn Connection) ConnectionTieBreak {
 		return TieBreakWon
 	} else if dupConnLocal.uid < conn.uid {
 		return TieBreakLost
-	} else {
-		return TieBreakTied
 	}
+	return TieBreakTied
 }
 
+// Established returns true if the connection is established.
+// TODO(pb): data race?
 func (conn *LocalConnection) Established() bool {
 	return conn.established
 }
 
+// SendProtocolMsg implements ProtocolSender.
 func (conn *LocalConnection) SendProtocolMsg(m ProtocolMsg) error {
 	if err := conn.sendProtocolMsg(m); err != nil {
 		conn.Shutdown(err)
@@ -135,6 +181,7 @@ func (conn *LocalConnection) SendProtocolMsg(m ProtocolMsg) error {
 	return nil
 }
 
+// GossipSenders implements GossipConnection.
 func (conn *LocalConnection) GossipSenders() *GossipSenders {
 	return conn.gossipSenders
 }
@@ -146,7 +193,8 @@ func (conn *LocalConnection) GossipSenders() *GossipSenders {
 // do not need locks for reading, and only need write locks for fields
 // read by other processes.
 
-// Non-blocking.
+// Shutdown is non-blocking.
+// TODO(pb): must be?
 func (conn *LocalConnection) Shutdown(err error) {
 	// err should always be a real error, even if only io.EOF
 	if err == nil {
@@ -176,7 +224,10 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, errorChan <
 	defer func() { conn.shutdown(err) }()
 	defer close(finished)
 
-	conn.TCPConn.SetLinger(0)
+	if err = conn.TCPConn.SetLinger(0); err != nil {
+		return
+	}
+
 	intro, err := ProtocolIntroParams{
 		MinVersion: conn.Router.ProtocolMinVersion,
 		MaxVersion: ProtocolMaxVersion,
@@ -282,6 +333,7 @@ func (conn *LocalConnection) makeFeatures() map[string]string {
 
 type features map[string]string
 
+// TODO(pb): don't export
 func (features features) MustHave(keys []string) error {
 	for _, key := range keys {
 		if _, ok := features[key]; !ok {
@@ -291,6 +343,7 @@ func (features features) MustHave(keys []string) error {
 	return nil
 }
 
+// TODO(pb): don't export
 func (features features) Get(key string) string {
 	return features[key]
 }
@@ -387,6 +440,7 @@ func (conn *LocalConnection) actorLoop(actionChan <-chan ConnectionAction, error
 			}
 		}
 	}
+
 	return
 }
 
@@ -434,8 +488,9 @@ func (conn *LocalConnection) sendProtocolMsg(m ProtocolMsg) error {
 func (conn *LocalConnection) receiveTCP(receiver TCPReceiver) {
 	var err error
 	for {
-		conn.extendReadDeadline()
-
+		if err = conn.extendReadDeadline(); err != nil {
+			break
+		}
 		var msg []byte
 		if msg, err = receiver.Receive(); err != nil {
 			break
@@ -464,10 +519,13 @@ func (conn *LocalConnection) handleProtocolMsg(tag ProtocolTag, payload []byte) 
 	return nil
 }
 
-func (conn *LocalConnection) extendReadDeadline() {
-	conn.TCPConn.SetReadDeadline(time.Now().Add(TCPHeartbeat * 2))
+func (conn *LocalConnection) extendReadDeadline() error {
+	return conn.TCPConn.SetReadDeadline(time.Now().Add(TCPHeartbeat * 2))
 }
 
+// Untrusted returns true if either we don't trust our remote, or are not
+// trusted by our remote.
+// TODO(pb): does this need to be exported?
 func (conn *LocalConnection) Untrusted() bool {
 	return !conn.TrustRemote || !conn.TrustedByRemote
 }
