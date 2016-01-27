@@ -3,29 +3,29 @@ package mesh
 import (
 	"encoding/gob"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
 )
 
-// LocalPeer is the only "active" peer in the mesh. It extends Peer with
+// localPeer is the only "active" peer in the mesh. It extends Peer with
 // additional behaviors, mostly to retrieve and manage connection state.
-type LocalPeer struct {
+type localPeer struct {
 	sync.RWMutex
 	*Peer
 	router     *Router
-	actionChan chan<- LocalPeerAction
+	actionChan chan<- localPeerAction
 }
 
-// LocalPeerAction is the actor closure used by LocalPeer.
-// TODO(pb): does this need to be exported?
-type LocalPeerAction func()
+// The actor closure used by localPeer.
+type localPeerAction func()
 
-// NewLocalPeer returns a usable LocalPeer.
-func NewLocalPeer(name PeerName, nickName string, router *Router) *LocalPeer {
-	actionChan := make(chan LocalPeerAction, ChannelSize)
-	peer := &LocalPeer{
-		Peer:       NewPeer(name, nickName, randomPeerUID(), 0, randomPeerShortID()),
+// newLocalPeer returns a usable LocalPeer.
+func newLocalPeer(name PeerName, nickName string, router *Router) *localPeer {
+	actionChan := make(chan localPeerAction, ChannelSize)
+	peer := &localPeer{
+		Peer:       newPeer(name, nickName, randomPeerUID(), 0, randomPeerShortID()),
 		router:     router,
 		actionChan: actionChan,
 	}
@@ -34,18 +34,21 @@ func NewLocalPeer(name PeerName, nickName string, router *Router) *LocalPeer {
 }
 
 // Connections returns all the connections that the local peer is aware of.
-func (peer *LocalPeer) Connections() ConnectionSet {
-	connections := make(ConnectionSet)
+func (peer *localPeer) getConnections() connectionSet {
+	connections := make(connectionSet)
 	peer.RLock()
 	defer peer.RUnlock()
 	for _, conn := range peer.connections {
-		connections[conn] = void
+		connections[conn] = struct{}{}
 	}
 	return connections
 }
 
 // ConnectionTo returns the connection to the named peer, if any.
-func (peer *LocalPeer) ConnectionTo(name PeerName) (Connection, bool) {
+//
+// TODO(pb): Weave Net invokes router.Ourself.ConnectionTo;
+// it may be better to provide that on Router directly.
+func (peer *localPeer) ConnectionTo(name PeerName) (Connection, bool) {
 	peer.RLock()
 	defer peer.RUnlock()
 	conn, found := peer.connections[name]
@@ -53,7 +56,10 @@ func (peer *LocalPeer) ConnectionTo(name PeerName) (Connection, bool) {
 }
 
 // ConnectionsTo returns all known connections to the named peers.
-func (peer *LocalPeer) ConnectionsTo(names []PeerName) []Connection {
+//
+// TODO(pb): Weave Net invokes router.Ourself.ConnectionsTo;
+// it may be better to provide that on Router directly.
+func (peer *localPeer) ConnectionsTo(names []PeerName) []Connection {
 	if len(names) == 0 {
 		return nil
 	}
@@ -72,7 +78,7 @@ func (peer *LocalPeer) ConnectionsTo(names []PeerName) []Connection {
 
 // CreateConnection creates a new connection to peerAddr. If acceptNewPeer is
 // false, peerAddr must already be a member of the mesh.
-func (peer *LocalPeer) CreateConnection(peerAddr string, acceptNewPeer bool) error {
+func (peer *localPeer) createConnection(peerAddr string, acceptNewPeer bool) error {
 	if err := peer.checkConnectionLimit(); err != nil {
 		return err
 	}
@@ -84,15 +90,15 @@ func (peer *LocalPeer) CreateConnection(peerAddr string, acceptNewPeer bool) err
 	if err != nil {
 		return err
 	}
-	connRemote := NewRemoteConnection(peer.Peer, nil, tcpConn.RemoteAddr().String(), true, false)
-	StartLocalConnection(connRemote, tcpConn, peer.router, acceptNewPeer)
+	connRemote := newRemoteConnection(peer.Peer, nil, tcpConn.RemoteAddr().String(), true, false)
+	startLocalConnection(connRemote, tcpConn, peer.router, acceptNewPeer)
 	return nil
 }
 
 // ACTOR client API
 
-// AddConnection adds the connection to the peer. Synchronous.
-func (peer *LocalPeer) AddConnection(conn *LocalConnection) error {
+// Synchronous.
+func (peer *localPeer) doAddConnection(conn *LocalConnection) error {
 	resultChan := make(chan error)
 	peer.actionChan <- func() {
 		resultChan <- peer.handleAddConnection(conn)
@@ -100,16 +106,15 @@ func (peer *LocalPeer) AddConnection(conn *LocalConnection) error {
 	return <-resultChan
 }
 
-// ConnectionEstablished marks the connection as established within the peer.
 // Asynchronous.
-func (peer *LocalPeer) ConnectionEstablished(conn *LocalConnection) {
+func (peer *localPeer) doConnectionEstablished(conn *LocalConnection) {
 	peer.actionChan <- func() {
 		peer.handleConnectionEstablished(conn)
 	}
 }
 
-// DeleteConnection removes the connection from the peer. Synchronous.
-func (peer *LocalPeer) DeleteConnection(conn *LocalConnection) {
+// Synchronous.
+func (peer *localPeer) doDeleteConnection(conn *LocalConnection) {
 	resultChan := make(chan interface{})
 	peer.actionChan <- func() {
 		peer.handleDeleteConnection(conn)
@@ -118,29 +123,28 @@ func (peer *LocalPeer) DeleteConnection(conn *LocalConnection) {
 	<-resultChan
 }
 
-// Encode writes the peer to the encoder.
-func (peer *LocalPeer) Encode(enc *gob.Encoder) {
+func (peer *localPeer) encode(enc *gob.Encoder) {
 	peer.RLock()
 	defer peer.RUnlock()
-	peer.Peer.Encode(enc)
+	peer.Peer.encode(enc)
 }
 
 // ACTOR server
 
-func (peer *LocalPeer) actorLoop(actionChan <-chan LocalPeerAction) {
-	gossipTimer := time.Tick(GossipInterval)
+func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
+	gossipTimer := time.Tick(gossipInterval)
 	for {
 		select {
 		case action := <-actionChan:
 			action()
 		case <-gossipTimer:
-			peer.router.SendAllGossip()
+			peer.router.sendAllGossip()
 		}
 	}
 }
 
-func (peer *LocalPeer) handleAddConnection(conn Connection) error {
-	if peer.Peer != conn.Local() {
+func (peer *localPeer) handleAddConnection(conn Connection) error {
+	if peer.Peer != conn.getLocal() {
 		log.Fatal("Attempt made to add connection to peer where peer is not the source of connection")
 	}
 	if conn.Remote() == nil {
@@ -153,15 +157,15 @@ func (peer *LocalPeer) handleAddConnection(conn Connection) error {
 		if dupConn == conn {
 			return nil
 		}
-		switch conn.BreakTie(dupConn) {
-		case TieBreakWon:
-			dupConn.Shutdown(dupErr)
+		switch conn.breakTie(dupConn) {
+		case tieBreakWon:
+			dupConn.shutdown(dupErr)
 			peer.handleDeleteConnection(dupConn)
-		case TieBreakLost:
+		case tieBreakLost:
 			return dupErr
-		case TieBreakTied:
+		case tieBreakTied:
 			// oh good grief. Sod it, just kill both of them.
-			dupConn.Shutdown(dupErr)
+			dupConn.shutdown(dupErr)
 			peer.handleDeleteConnection(dupConn)
 			return dupErr
 		}
@@ -172,35 +176,35 @@ func (peer *LocalPeer) handleAddConnection(conn Connection) error {
 	_, isConnectedPeer := peer.router.Routes.Unicast(toName)
 	peer.addConnection(conn)
 	if isConnectedPeer {
-		conn.Log("connection added")
+		conn.log("connection added")
 	} else {
-		conn.Log("connection added (new peer)")
-		peer.router.SendAllGossipDown(conn)
+		conn.log("connection added (new peer)")
+		peer.router.sendAllGossipDown(conn)
 	}
 
-	peer.router.Routes.Recalculate()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate(conn.Remote())
 
 	return nil
 }
 
-func (peer *LocalPeer) handleConnectionEstablished(conn Connection) {
-	if peer.Peer != conn.Local() {
+func (peer *localPeer) handleConnectionEstablished(conn Connection) {
+	if peer.Peer != conn.getLocal() {
 		log.Fatal("Peer informed of active connection where peer is not the source of connection")
 	}
 	if dupConn, found := peer.connections[conn.Remote().Name]; !found || conn != dupConn {
-		conn.Shutdown(fmt.Errorf("Cannot set unknown connection active"))
+		conn.shutdown(fmt.Errorf("Cannot set unknown connection active"))
 		return
 	}
 	peer.connectionEstablished(conn)
-	conn.Log("connection fully established")
+	conn.log("connection fully established")
 
-	peer.router.Routes.Recalculate()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
-func (peer *LocalPeer) handleDeleteConnection(conn Connection) {
-	if peer.Peer != conn.Local() {
+func (peer *localPeer) handleDeleteConnection(conn Connection) {
+	if peer.Peer != conn.getLocal() {
 		log.Fatal("Attempt made to delete connection from peer where peer is not the source of connection")
 	}
 	if conn.Remote() == nil {
@@ -211,27 +215,27 @@ func (peer *LocalPeer) handleDeleteConnection(conn Connection) {
 		return
 	}
 	peer.deleteConnection(conn)
-	conn.Log("connection deleted")
+	conn.log("connection deleted")
 	// Must do garbage collection first to ensure we don't send out an
 	// update with unreachable peers (can cause looping)
 	peer.router.Peers.GarbageCollect()
-	peer.router.Routes.Recalculate()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
 // helpers
 
-func (peer *LocalPeer) broadcastPeerUpdate(peers ...*Peer) {
+func (peer *localPeer) broadcastPeerUpdate(peers ...*Peer) {
 	// Some tests run without a router.  This should be fixed so
 	// that the relevant part of Router can be easily run in the
 	// context of a test, but that will involve significant
 	// reworking of tests.
 	if peer.router != nil {
-		peer.router.BroadcastTopologyUpdate(append(peers, peer.Peer))
+		peer.router.broadcastTopologyUpdate(append(peers, peer.Peer))
 	}
 }
 
-func (peer *LocalPeer) checkConnectionLimit() error {
+func (peer *localPeer) checkConnectionLimit() error {
 	limit := peer.router.ConnLimit
 	if 0 != limit && peer.connectionCount() >= limit {
 		return fmt.Errorf("Connection limit reached (%v)", limit)
@@ -239,40 +243,40 @@ func (peer *LocalPeer) checkConnectionLimit() error {
 	return nil
 }
 
-func (peer *LocalPeer) addConnection(conn Connection) {
+func (peer *localPeer) addConnection(conn Connection) {
 	peer.Lock()
 	defer peer.Unlock()
 	peer.connections[conn.Remote().Name] = conn
 	peer.Version++
 }
 
-func (peer *LocalPeer) deleteConnection(conn Connection) {
+func (peer *localPeer) deleteConnection(conn Connection) {
 	peer.Lock()
 	defer peer.Unlock()
 	delete(peer.connections, conn.Remote().Name)
 	peer.Version++
 }
 
-func (peer *LocalPeer) connectionEstablished(conn Connection) {
+func (peer *localPeer) connectionEstablished(conn Connection) {
 	peer.Lock()
 	defer peer.Unlock()
 	peer.Version++
 }
 
-func (peer *LocalPeer) connectionCount() int {
+func (peer *localPeer) connectionCount() int {
 	peer.RLock()
 	defer peer.RUnlock()
 	return len(peer.connections)
 }
 
-func (peer *LocalPeer) setShortID(shortID PeerShortID) {
+func (peer *localPeer) setShortID(shortID PeerShortID) {
 	peer.Lock()
 	defer peer.Unlock()
 	peer.ShortID = shortID
 	peer.Version++
 }
 
-func (peer *LocalPeer) setVersionBeyond(version uint64) bool {
+func (peer *localPeer) setVersionBeyond(version uint64) bool {
 	peer.Lock()
 	defer peer.Unlock()
 	if version >= peer.Version {

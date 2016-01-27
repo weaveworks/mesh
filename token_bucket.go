@@ -6,18 +6,17 @@ import (
 
 // TokenBucket acts as a rate-limiter.
 // It is not safe for concurrent use by multiple goroutines.
-// TODO(pb): should this be exported?
-type TokenBucket struct {
+type tokenBucket struct {
 	capacity             int64         // Maximum capacity of bucket
 	tokenInterval        time.Duration // Token replenishment rate
 	refillDuration       time.Duration // Time to refill from empty
 	earliestUnspentToken time.Time
 }
 
-// NewTokenBucket returns a bucket containing capacity tokens, refilled at a
+// newTokenBucket returns a bucket containing capacity tokens, refilled at a
 // rate of one token per tokenInterval.
-func NewTokenBucket(capacity int64, tokenInterval time.Duration) *TokenBucket {
-	tb := TokenBucket{
+func newTokenBucket(capacity int64, tokenInterval time.Duration) *tokenBucket {
+	tb := tokenBucket{
 		capacity:       capacity,
 		tokenInterval:  tokenInterval,
 		refillDuration: tokenInterval * time.Duration(capacity)}
@@ -27,9 +26,9 @@ func NewTokenBucket(capacity int64, tokenInterval time.Duration) *TokenBucket {
 	return &tb
 }
 
-// Wait blocks until there is a token available.
-// Wait is not safe for concurrent use by multiple goroutines.
-func (tb *TokenBucket) Wait() {
+// Blocks until there is a token available.
+// Not safe for concurrent use by multiple goroutines.
+func (tb *tokenBucket) wait() {
 	// If earliest unspent token is in the future, sleep until then
 	time.Sleep(tb.earliestUnspentToken.Sub(time.Now()))
 
@@ -44,6 +43,6 @@ func (tb *TokenBucket) Wait() {
 }
 
 // Determine the historic token timestamp representing a full bucket
-func (tb *TokenBucket) capacityToken() time.Time {
+func (tb *tokenBucket) capacityToken() time.Time {
 	return time.Now().Add(-tb.refillDuration).Truncate(tb.tokenInterval)
 }

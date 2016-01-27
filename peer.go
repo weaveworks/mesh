@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 )
@@ -12,13 +13,12 @@ import (
 // peers. By itself, it is a remote peer.
 type Peer struct {
 	Name PeerName
-	PeerSummary
+	peerSummary
 	localRefCount uint64 // maintained by Peers
 	connections   map[PeerName]Connection
 }
 
-// PeerSummary is a collection of identifying information for a peer.
-type PeerSummary struct {
+type peerSummary struct {
 	NameByte   []byte
 	NickName   string
 	UID        PeerUID
@@ -27,24 +27,19 @@ type PeerSummary struct {
 	HasShortID bool
 }
 
-// ConnectionSet is an set of connection objects.
-type ConnectionSet map[Connection]struct{}
+type connectionSet map[Connection]struct{}
 
-// NewPeerFromSummary constructs a new Peer object with no connections from
-// the provided summary.
-func NewPeerFromSummary(summary PeerSummary) *Peer {
+func newPeerFromSummary(summary peerSummary) *Peer {
 	return &Peer{
 		Name:        PeerNameFromBin(summary.NameByte),
-		PeerSummary: summary,
+		peerSummary: summary,
 		connections: make(map[PeerName]Connection),
 	}
 }
 
-// NewPeer constructs a new Peer object with no connections from the provided
-// composite parts.
-func NewPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortID PeerShortID) *Peer {
-	return NewPeerFromSummary(PeerSummary{
-		NameByte:   name.Bin(),
+func newPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortID PeerShortID) *Peer {
+	return newPeerFromSummary(peerSummary{
+		NameByte:   name.bytes(),
 		NickName:   nickName,
 		UID:        uid,
 		Version:    version,
@@ -53,16 +48,8 @@ func NewPeer(name PeerName, nickName string, uid PeerUID, version uint64, shortI
 	})
 }
 
-// NewPeerPlaceholder constructs a partial Peer object with only the passed
-// name. Useful when we get a strange update from the mesh.
-func NewPeerPlaceholder(name PeerName) *Peer {
-	return NewPeerFromSummary(PeerSummary{NameByte: name.Bin()})
-}
-
-// NewPeerFrom constructs a new Peer object that is a copy of the passed peer.
-// Primarily used for tests.
-func NewPeerFrom(peer *Peer) *Peer {
-	return NewPeerFromSummary(peer.PeerSummary)
+func newPeerPlaceholder(name PeerName) *Peer {
+	return newPeerFromSummary(peerSummary{NameByte: name.bytes()})
 }
 
 // String returns the peer name and nickname.
@@ -91,19 +78,19 @@ func (peer *Peer) String() string {
 //
 // NB: This function should generally be invoked while holding a read lock on
 // Peers and LocalPeer.
-func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
+func (peer *Peer) routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
 	routes := make(unicastRoutes)
 	routes[peer.Name] = UnknownPeerName
 	nextWorklist := []*Peer{peer}
 	for len(nextWorklist) > 0 {
 		worklist := nextWorklist
-		sort.Sort(ListOfPeers(worklist))
+		sort.Sort(listOfPeers(worklist))
 		nextWorklist = []*Peer{}
 		for _, curPeer := range worklist {
 			if curPeer == stopAt {
 				return true, routes
 			}
-			curPeer.ForEachConnectedPeer(establishedAndSymmetric, routes,
+			curPeer.forEachConnectedPeer(establishedAndSymmetric, routes,
 				func(remotePeer *Peer) {
 					nextWorklist = append(nextWorklist, remotePeer)
 					remoteName := remotePeer.Name
@@ -122,21 +109,19 @@ func (peer *Peer) Routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 	return false, routes
 }
 
-// ForEachConnectedPeer applies f to all peers reachable by peer. If
-// establishedAndSymmetric is true, only peers with established bidirectional
-// connections will be selected. The exclude maps is treated as a set of
-// remote peers to blacklist.
-// TODO(pb): change exclude to map[PeerName]struct{}?
-func (peer *Peer) ForEachConnectedPeer(establishedAndSymmetric bool, exclude map[PeerName]PeerName, f func(*Peer)) {
+// Apply f to all peers reachable by peer. If establishedAndSymmetric is true,
+// only peers with established bidirectional connections will be selected. The
+// exclude maps is treated as a set of remote peers to blacklist.
+func (peer *Peer) forEachConnectedPeer(establishedAndSymmetric bool, exclude map[PeerName]PeerName, f func(*Peer)) {
 	for remoteName, conn := range peer.connections {
-		if establishedAndSymmetric && !conn.Established() {
+		if establishedAndSymmetric && !conn.isEstablished() {
 			continue
 		}
 		if _, found := exclude[remoteName]; found {
 			continue
 		}
 		remotePeer := conn.Remote()
-		if remoteConn, found := remotePeer.connections[peer.Name]; !establishedAndSymmetric || (found && remoteConn.Established()) {
+		if remoteConn, found := remotePeer.connections[peer.Name]; !establishedAndSymmetric || (found && remoteConn.isEstablished()) {
 			f(remotePeer)
 		}
 	}
@@ -146,7 +131,7 @@ func (peer *Peer) ForEachConnectedPeer(establishedAndSymmetric bool, exclude map
 type PeerUID uint64
 
 // ParsePeerUID parses a decimal peer UID from a string.
-func ParsePeerUID(s string) (PeerUID, error) {
+func parsePeerUID(s string) (PeerUID, error) {
 	uid, err := strconv.ParseUint(s, 10, 64)
 	return PeerUID(uid), err
 }
@@ -164,21 +149,19 @@ func randomPeerUID() PeerUID {
 // randomly assigned, but we detect and recover from collisions. This
 // does limit us to 4096 peers, but that should be sufficient for a
 // while.
-// TODO(pb): does this need to be exported?
 type PeerShortID uint16
 
-// PeerShortIDBits is the usable bitsize of a PeerShortID.
-// TODO(pb): does this need to be exported?
-const PeerShortIDBits = 12
+const peerShortIDBits = 12
 
 func randomPeerShortID() PeerShortID {
-	return PeerShortID(randUint16() & (1<<PeerShortIDBits - 1))
+	return PeerShortID(randUint16() & (1<<peerShortIDBits - 1))
 }
 
 func randBytes(n int) []byte {
 	buf := make([]byte, n)
-	_, err := rand.Read(buf)
-	checkFatal(err)
+	if _, err := rand.Read(buf); err != nil {
+		log.Fatal(err)
+	}
 	return buf
 }
 
@@ -191,20 +174,19 @@ func randUint16() (r uint16) {
 }
 
 // ListOfPeers implements sort.Interface on a slice of Peers.
-// TODO(pb): does this need to be exported?
-type ListOfPeers []*Peer
+type listOfPeers []*Peer
 
 // Len implements sort.Interface.
-func (lop ListOfPeers) Len() int {
+func (lop listOfPeers) Len() int {
 	return len(lop)
 }
 
 // Swap implements sort.Interface.
-func (lop ListOfPeers) Swap(i, j int) {
+func (lop listOfPeers) Swap(i, j int) {
 	lop[i], lop[j] = lop[j], lop[i]
 }
 
 // Less implements sort.Interface.
-func (lop ListOfPeers) Less(i, j int) bool {
+func (lop listOfPeers) Less(i, j int) bool {
 	return lop[i].Name < lop[j].Name
 }

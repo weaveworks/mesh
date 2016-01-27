@@ -15,14 +15,15 @@ type PeerName string
 const (
 	// PeerNameFlavour is the type of peer names we use.
 	PeerNameFlavour = "hash"
+
 	// NameSize is the number of bytes in a peer name.
 	NameSize = sha256.Size >> 1
+
 	// UnknownPeerName is used as a sentinel value.
 	UnknownPeerName = PeerName("")
 )
 
 // PeerNameFromUserInput parses PeerName from a user-provided string.
-// TODO(pb): does this need to be exported?
 func PeerNameFromUserInput(userInput string) (PeerName, error) {
 	// fixed-length identity
 	nameByteAry := sha256.Sum256([]byte(userInput))
@@ -30,7 +31,6 @@ func PeerNameFromUserInput(userInput string) (PeerName, error) {
 }
 
 // PeerNameFromString parses PeerName from a generic string.
-// TODO(pb): does this need to be exported?
 func PeerNameFromString(nameStr string) (PeerName, error) {
 	if _, err := hex.DecodeString(nameStr); err != nil {
 		return UnknownPeerName, err
@@ -39,7 +39,6 @@ func PeerNameFromString(nameStr string) (PeerName, error) {
 }
 
 // PeerNameFromBin parses PeerName from a byte slice.
-// TODO(pb): does this need to be exported?
 func PeerNameFromBin(nameByte []byte) PeerName {
 	return PeerName(hex.EncodeToString(nameByte))
 }

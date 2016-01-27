@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"io"
+	"log"
 	"math/rand"
 	"sync"
 )
@@ -11,18 +12,16 @@ import (
 // Peers collects all of the known peers in the mesh, including ourself.
 type Peers struct {
 	sync.RWMutex
-	ourself   *LocalPeer
+	ourself   *localPeer
 	byName    map[PeerName]*Peer
-	byShortID map[PeerShortID]ShortIDPeers
+	byShortID map[PeerShortID]shortIDPeers
 	onGC      []func(*Peer)
 
 	// Called when the mapping from short IDs to peers changes
 	onInvalidateShortIDs []func()
 }
 
-// ShortIDPeers is a short reference type used internally within Peers.
-// TODO(pb): unexport
-type ShortIDPeers struct {
+type shortIDPeers struct {
 	// If we know about a single peer with the short ID, this is
 	// that peer. If there is a collision, this is the peer with
 	// the lowest Name.
@@ -32,22 +31,18 @@ type ShortIDPeers struct {
 	others []*Peer
 }
 
-// PeerNameSet is a set of PeerNames used internally throughout mesh.
-// TODO(pb): does this need to be exported?
-type PeerNameSet map[PeerName]struct{}
+type peerNameSet map[PeerName]struct{}
 
-// ConnectionSummary collects details about a connection.
-type ConnectionSummary struct {
+type connectionSummary struct {
 	NameByte      []byte
 	RemoteTCPAddr string
 	Outbound      bool
 	Established   bool
 }
 
-// PeersPendingNotifications due to changes to Peers that need to be sent out
+// Due to changes to Peers that need to be sent out
 // once the Peers is unlocked.
-// TODO(pb): unexport
-type PeersPendingNotifications struct {
+type peersPendingNotifications struct {
 	// Peers that have been GCed
 	removed []*Peer
 
@@ -61,14 +56,13 @@ type PeersPendingNotifications struct {
 	localPeerModified bool
 }
 
-// NewPeers constructs a new, empty Peers.
-func NewPeers(ourself *LocalPeer) *Peers {
+func newPeers(ourself *localPeer) *Peers {
 	peers := &Peers{
 		ourself:   ourself,
 		byName:    make(map[PeerName]*Peer),
-		byShortID: make(map[PeerShortID]ShortIDPeers),
+		byShortID: make(map[PeerShortID]shortIDPeers),
 	}
-	peers.FetchWithDefault(ourself.Peer)
+	peers.fetchWithDefault(ourself.Peer)
 	return peers
 }
 
@@ -96,7 +90,7 @@ func (peers *Peers) OnInvalidateShortIDs(callback func()) {
 	peers.onInvalidateShortIDs = append(peers.onInvalidateShortIDs, callback)
 }
 
-func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
+func (peers *Peers) unlockAndNotify(pending *peersPendingNotifications) {
 	broadcastLocalPeer := (pending.reassignLocalShortID && peers.reassignLocalShortID(pending)) || pending.localPeerModified
 	onGC := peers.onGC
 	onInvalidateShortIDs := peers.onInvalidateShortIDs
@@ -121,14 +115,14 @@ func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
 	}
 }
 
-func (peers *Peers) addByShortID(peer *Peer, pending *PeersPendingNotifications) {
+func (peers *Peers) addByShortID(peer *Peer, pending *peersPendingNotifications) {
 	if !peer.HasShortID {
 		return
 	}
 
 	entry, ok := peers.byShortID[peer.ShortID]
 	if !ok {
-		entry = ShortIDPeers{peer: peer}
+		entry = shortIDPeers{peer: peer}
 	} else if entry.peer == nil {
 		// This short ID is free, but was used in the past.
 		// Because we are reusing it, it's an invalidation
@@ -157,7 +151,7 @@ func (peers *Peers) addByShortID(peer *Peer, pending *PeersPendingNotifications)
 	peers.byShortID[peer.ShortID] = entry
 }
 
-func (peers *Peers) deleteByShortID(peer *Peer, pending *PeersPendingNotifications) {
+func (peers *Peers) deleteByShortID(peer *Peer, pending *peersPendingNotifications) {
 	if !peer.HasShortID {
 		return
 	}
@@ -199,7 +193,7 @@ func (peers *Peers) deleteByShortID(peer *Peer, pending *PeersPendingNotificatio
 		// This is the last peer with the short ID. We clear
 		// the entry, don't delete it, in order to detect when
 		// it gets re-used.
-		peers.byShortID[peer.ShortID] = ShortIDPeers{}
+		peers.byShortID[peer.ShortID] = shortIDPeers{}
 		return
 	}
 
@@ -208,7 +202,7 @@ func (peers *Peers) deleteByShortID(peer *Peer, pending *PeersPendingNotificatio
 	peers.byShortID[peer.ShortID] = entry
 }
 
-func (peers *Peers) reassignLocalShortID(pending *PeersPendingNotifications) bool {
+func (peers *Peers) reassignLocalShortID(pending *peersPendingNotifications) bool {
 	newShortID, ok := peers.chooseShortID()
 	if ok {
 		peers.setLocalShortID(newShortID, pending)
@@ -219,7 +213,7 @@ func (peers *Peers) reassignLocalShortID(pending *PeersPendingNotifications) boo
 	return false
 }
 
-func (peers *Peers) setLocalShortID(newShortID PeerShortID, pending *PeersPendingNotifications) {
+func (peers *Peers) setLocalShortID(newShortID PeerShortID, pending *peersPendingNotifications) {
 	peers.deleteByShortID(peers.ourself.Peer, pending)
 	peers.ourself.setShortID(newShortID)
 	peers.addByShortID(peers.ourself.Peer, pending)
@@ -232,7 +226,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	// First, just try picking some short IDs at random, and
 	// seeing if they are available:
 	for i := 0; i < 10; i++ {
-		shortID := PeerShortID(rng.Intn(1 << PeerShortIDBits))
+		shortID := PeerShortID(rng.Intn(1 << peerShortIDBits))
 		if peers.byShortID[shortID].peer == nil {
 			return shortID, true
 		}
@@ -240,7 +234,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 
 	// Looks like most short IDs are used. So count the number of
 	// unused ones, and pick one at random.
-	available := int(1 << PeerShortIDBits)
+	available := int(1 << peerShortIDBits)
 	for _, entry := range peers.byShortID {
 		if entry.peer != nil {
 			available--
@@ -267,12 +261,12 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	}
 }
 
-// FetchWithDefault will use reference fields of the passed peer object to
+// fetchWithDefault will use reference fields of the passed peer object to
 // look up and return an existing, matching peer. If no matching peer is
 // found, the passed peer is saved and returned.
-func (peers *Peers) FetchWithDefault(peer *Peer) *Peer {
+func (peers *Peers) fetchWithDefault(peer *Peer) *Peer {
 	peers.Lock()
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	defer peers.unlockAndNotify(&pending)
 
 	if existingPeer, found := peers.byName[peer.Name]; found {
@@ -294,9 +288,8 @@ func (peers *Peers) Fetch(name PeerName) *Peer {
 	return peers.byName[name]
 }
 
-// FetchAndAddRef returns a peer matching the passed name, and increments its
-// refcount. If no matching peer is found, FetchAndAddRef returns nil.
-func (peers *Peers) FetchAndAddRef(name PeerName) *Peer {
+// Like fetch, but increments local refcount.
+func (peers *Peers) fetchAndAddRef(name PeerName) *Peer {
 	peers.Lock()
 	defer peers.Unlock()
 	peer := peers.byName[name]
@@ -316,14 +309,13 @@ func (peers *Peers) FetchByShortID(shortID PeerShortID) *Peer {
 
 // Dereference decrements the refcount of the matching peer.
 // TODO(pb): this is an awkward way to use the mutex; consider refactoring
-func (peers *Peers) Dereference(peer *Peer) {
+func (peers *Peers) dereference(peer *Peer) {
 	peers.Lock()
 	defer peers.Unlock()
 	peer.localRefCount--
 }
 
-// ForEach applies fun to each peer under a read lock.
-func (peers *Peers) ForEach(fun func(*Peer)) {
+func (peers *Peers) forEach(fun func(*Peer)) {
 	peers.RLock()
 	defer peers.RUnlock()
 	for _, peer := range peers.byName {
@@ -331,15 +323,15 @@ func (peers *Peers) ForEach(fun func(*Peer)) {
 	}
 }
 
-// ApplyUpdate merges an incoming update with our own topology.
+// Merge an incoming update with our own topology.
 //
 // We add peers hitherto unknown to us, and update peers for which the
 // update contains a more recent version than known to us. The return
 // value is a) a representation of the received update, and b) an
 // "improved" update containing just these new/updated elements.
-func (peers *Peers) ApplyUpdate(update []byte) (PeerNameSet, PeerNameSet, error) {
+func (peers *Peers) applyUpdate(update []byte) (peerNameSet, peerNameSet, error) {
 	peers.Lock()
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	defer peers.unlockAndNotify(&pending)
 
 	newPeers, decodedUpdate, decodedConns, err := peers.decodeUpdate(update)
@@ -354,34 +346,32 @@ func (peers *Peers) ApplyUpdate(update []byte) (PeerNameSet, PeerNameSet, error)
 	}
 
 	// Now apply the updates
-	newUpdate := peers.applyUpdate(decodedUpdate, decodedConns, &pending)
+	newUpdate := peers.applyDecodedUpdate(decodedUpdate, decodedConns, &pending)
 	peers.garbageCollect(&pending)
 	for _, peerRemoved := range pending.removed {
 		delete(newUpdate, peerRemoved.Name)
 	}
 
-	updateNames := make(PeerNameSet)
+	updateNames := make(peerNameSet)
 	for _, peer := range decodedUpdate {
-		updateNames[peer.Name] = void
+		updateNames[peer.Name] = struct{}{}
 	}
 
 	return updateNames, newUpdate, nil
 }
 
-// Names allocates and returns a set of all peer names.
-func (peers *Peers) Names() PeerNameSet {
+func (peers *Peers) names() peerNameSet {
 	peers.RLock()
 	defer peers.RUnlock()
 
-	names := make(PeerNameSet)
+	names := make(peerNameSet)
 	for name := range peers.byName {
-		names[name] = void
+		names[name] = struct{}{}
 	}
 	return names
 }
 
-// EncodePeers returns a Gob-encoded set of known peers.
-func (peers *Peers) EncodePeers(names PeerNameSet) []byte {
+func (peers *Peers) encodePeers(names peerNameSet) []byte {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
 	peers.RLock()
@@ -389,9 +379,9 @@ func (peers *Peers) EncodePeers(names PeerNameSet) []byte {
 	for name := range names {
 		if peer, found := peers.byName[name]; found {
 			if peer == peers.ourself.Peer {
-				peers.ourself.Encode(enc)
+				peers.ourself.encode(enc)
 			} else {
-				peer.Encode(enc)
+				peer.encode(enc)
 			}
 		}
 	}
@@ -402,15 +392,15 @@ func (peers *Peers) EncodePeers(names PeerNameSet) []byte {
 // callbacks.
 func (peers *Peers) GarbageCollect() {
 	peers.Lock()
-	var pending PeersPendingNotifications
+	var pending peersPendingNotifications
 	defer peers.unlockAndNotify(&pending)
 
 	peers.garbageCollect(&pending)
 }
 
-func (peers *Peers) garbageCollect(pending *PeersPendingNotifications) {
+func (peers *Peers) garbageCollect(pending *peersPendingNotifications) {
 	peers.ourself.RLock()
-	_, reached := peers.ourself.Routes(nil, false)
+	_, reached := peers.ourself.routes(nil, false)
 	peers.ourself.RUnlock()
 
 	for name, peer := range peers.byName {
@@ -429,22 +419,22 @@ func (peers *Peers) garbageCollect(pending *PeersPendingNotifications) {
 	}
 }
 
-func (peers *Peers) decodeUpdate(update []byte) (newPeers map[PeerName]*Peer, decodedUpdate []*Peer, decodedConns [][]ConnectionSummary, err error) {
+func (peers *Peers) decodeUpdate(update []byte) (newPeers map[PeerName]*Peer, decodedUpdate []*Peer, decodedConns [][]connectionSummary, err error) {
 	newPeers = make(map[PeerName]*Peer)
 	decodedUpdate = []*Peer{}
-	decodedConns = [][]ConnectionSummary{}
+	decodedConns = [][]connectionSummary{}
 
 	decoder := gob.NewDecoder(bytes.NewReader(update))
 
 	for {
-		peerSummary, connSummaries, decErr := decodePeer(decoder)
+		summary, connSummaries, decErr := decodePeer(decoder)
 		if decErr == io.EOF {
 			break
 		} else if decErr != nil {
 			err = decErr
 			return
 		}
-		newPeer := NewPeerFromSummary(peerSummary)
+		newPeer := newPeerFromSummary(summary)
 		decodedUpdate = append(decodedUpdate, newPeer)
 		decodedConns = append(decodedConns, connSummaries)
 		if _, found := peers.byName[newPeer.Name]; !found {
@@ -462,14 +452,14 @@ func (peers *Peers) decodeUpdate(update []byte) (newPeers map[PeerName]*Peer, de
 				continue
 			}
 			// Update refers to a peer which we have no knowledge of.
-			newPeers[remoteName] = NewPeerPlaceholder(remoteName)
+			newPeers[remoteName] = newPeerPlaceholder(remoteName)
 		}
 	}
 	return
 }
 
-func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]ConnectionSummary, pending *PeersPendingNotifications) PeerNameSet {
-	newUpdate := make(PeerNameSet)
+func (peers *Peers) applyDecodedUpdate(decodedUpdate []*Peer, decodedConns [][]connectionSummary, pending *peersPendingNotifications) peerNameSet {
+	newUpdate := make(peerNameSet)
 	for idx, newPeer := range decodedUpdate {
 		connSummaries := decodedConns[idx]
 		name := newPeer.Name
@@ -486,7 +476,7 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 			}
 		case newPeer:
 			peer.connections = makeConnsMap(peer, connSummaries, peers.byName)
-			newUpdate[name] = void
+			newUpdate[name] = struct{}{}
 		default: // existing peer
 			if newPeer.Version < peer.Version ||
 				(newPeer.Version == peer.Version &&
@@ -506,31 +496,34 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 				peer.HasShortID = newPeer.HasShortID
 				peers.addByShortID(peer, pending)
 			}
-			newUpdate[name] = void
+			newUpdate[name] = struct{}{}
 		}
 	}
 	return newUpdate
 }
 
-// Encode writes the peer to the encoder.
-func (peer *Peer) Encode(enc *gob.Encoder) {
-	checkFatal(enc.Encode(peer.PeerSummary))
+func (peer *Peer) encode(enc *gob.Encoder) {
+	if err := enc.Encode(peer.peerSummary); err != nil {
+		log.Fatal(err)
+	}
 
-	connSummaries := []ConnectionSummary{}
+	connSummaries := []connectionSummary{}
 	for _, conn := range peer.connections {
-		connSummaries = append(connSummaries, ConnectionSummary{
+		connSummaries = append(connSummaries, connectionSummary{
 			conn.Remote().NameByte,
-			conn.RemoteTCPAddr(),
-			conn.Outbound(),
-			conn.Established(),
+			conn.remoteTCPAddress(),
+			conn.isOutbound(),
+			conn.isEstablished(),
 		})
 	}
 
-	checkFatal(enc.Encode(connSummaries))
+	if err := enc.Encode(connSummaries); err != nil {
+		log.Fatal(err)
+	}
 }
 
-func decodePeer(dec *gob.Decoder) (peerSummary PeerSummary, connSummaries []ConnectionSummary, err error) {
-	if err = dec.Decode(&peerSummary); err != nil {
+func decodePeer(dec *gob.Decoder) (ps peerSummary, connSummaries []connectionSummary, err error) {
+	if err = dec.Decode(&ps); err != nil {
 		return
 	}
 	if err = dec.Decode(&connSummaries); err != nil {
@@ -539,12 +532,12 @@ func decodePeer(dec *gob.Decoder) (peerSummary PeerSummary, connSummaries []Conn
 	return
 }
 
-func makeConnsMap(peer *Peer, connSummaries []ConnectionSummary, byName map[PeerName]*Peer) map[PeerName]Connection {
+func makeConnsMap(peer *Peer, connSummaries []connectionSummary, byName map[PeerName]*Peer) map[PeerName]Connection {
 	conns := make(map[PeerName]Connection)
 	for _, connSummary := range connSummaries {
 		name := PeerNameFromBin(connSummary.NameByte)
 		remotePeer := byName[name]
-		conn := NewRemoteConnection(peer, remotePeer, connSummary.RemoteTCPAddr, connSummary.Outbound, connSummary.Established)
+		conn := newRemoteConnection(peer, remotePeer, connSummary.RemoteTCPAddr, connSummary.Outbound, connSummary.Established)
 		conns[name] = conn
 	}
 	return conns

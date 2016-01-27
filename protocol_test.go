@@ -25,7 +25,7 @@ func (testConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-func connPair() (ProtocolIntroConn, ProtocolIntroConn) {
+func connPair() (protocolIntroConn, protocolIntroConn) {
 	a := testConn{}
 	b := testConn{}
 	a.Reader, b.Writer = io.Pipe()
@@ -33,10 +33,10 @@ func connPair() (ProtocolIntroConn, ProtocolIntroConn) {
 	return &a, &b
 }
 
-func doIntro(t *testing.T, params ProtocolIntroParams) <-chan ProtocolIntroResults {
-	ch := make(chan ProtocolIntroResults, 1)
+func doIntro(t *testing.T, params protocolIntroParams) <-chan protocolIntroResults {
+	ch := make(chan protocolIntroResults, 1)
 	go func() {
-		res, err := params.DoIntro()
+		res, err := params.doIntro()
 		require.Nil(t, err)
 		ch <- res
 	}()
@@ -45,7 +45,7 @@ func doIntro(t *testing.T, params ProtocolIntroParams) <-chan ProtocolIntroResul
 
 func doProtocolIntro(t *testing.T, aver, bver byte, password []byte) byte {
 	aconn, bconn := connPair()
-	aresch := doIntro(t, ProtocolIntroParams{
+	aresch := doIntro(t, protocolIntroParams{
 		MinVersion: ProtocolMinVersion,
 		MaxVersion: aver,
 		Features:   map[string]string{"Name": "A"},
@@ -53,7 +53,7 @@ func doProtocolIntro(t *testing.T, aver, bver byte, password []byte) byte {
 		Outbound:   true,
 		Password:   password,
 	})
-	bresch := doIntro(t, ProtocolIntroParams{
+	bresch := doIntro(t, protocolIntroParams{
 		MinVersion: ProtocolMinVersion,
 		MaxVersion: bver,
 		Features:   map[string]string{"Name": "B"},
