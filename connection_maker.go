@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"time"
+	"unicode"
 )
 
 const (
@@ -83,7 +84,9 @@ func (cm *connectionMaker) InitiateConnections(peers []string, replace bool) []e
 			host = peer
 			port = "0" // we use that as an indication that "no port was supplied"
 		}
-		if addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("%s:%s", host, port)); err != nil {
+		if !isAlnum(port) {
+			errors = append(errors, fmt.Errorf("invalid peer name %q, should just be host[:port]", peer))
+		} else if addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("%s:%s", host, port)); err != nil {
 			errors = append(errors, err)
 		} else {
 			addrs[peer] = addr
@@ -103,6 +106,15 @@ func (cm *connectionMaker) InitiateConnections(peers []string, replace bool) []e
 		return true
 	}
 	return errors
+}
+
+func isAlnum(s string) bool {
+	for _, c := range s {
+		if !unicode.In(c, unicode.Letter, unicode.Digit) {
+			return false
+		}
+	}
+	return true
 }
 
 // ForgetConnections removes direct connections to the provided peers,
