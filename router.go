@@ -1,6 +1,8 @@
 package mesh
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"math"
@@ -9,33 +11,20 @@ import (
 	"time"
 )
 
-const (
+var (
 	// Port is the port used for all mesh communication.
-	// TODO(pb): this should either not be exported, or made var
 	Port = 6783
 
 	// ChannelSize is the buffer size used by so-called actor goroutines
 	// throughout mesh.
-	// TODO(pb): this should either not be exported, or made var
 	ChannelSize = 16
+)
 
-	// TCPHeartbeat is how often a mesh connection will heartbeat.
-	// TODO(pb): this should either not be exported, or made var
-	tcpHeartbeat = 30 * time.Second
-
-	// GossipInterval is how often peers will broadcast their accumulated
-	// gossip.
-	// TODO(pb): this should either not be exported, or made var
-	gossipInterval = 30 * time.Second
-
-	// MaxDuration is a stand-in for forever.
-	// TODO(pb): this should not be exported
-	maxDuration = time.Duration(math.MaxInt64)
-
-	// Capacity of token bucket for rate limiting accepts.
-	acceptMaxTokens = 100
-
-	// Control rate at which new tokens are added to the bucket.
+const (
+	tcpHeartbeat     = 30 * time.Second
+	gossipInterval   = 30 * time.Second
+	maxDuration      = time.Duration(math.MaxInt64)
+	acceptMaxTokens  = 100
 	acceptTokenDelay = 100 * time.Millisecond // [2]
 )
 
@@ -99,8 +88,6 @@ func (router *Router) Stop() error {
 	return nil
 }
 
-// UsingPassword returns true if a password is set.
-// Passwords are used to establish encrypted connections.
 func (router *Router) usingPassword() bool {
 	return router.Password != nil
 }
@@ -123,7 +110,7 @@ func (router *Router) listenTCP(localPort int) {
 				continue
 			}
 			router.acceptTCP(tcpConn)
-			router.acceptLimiter.Wait()
+			router.acceptLimiter.wait()
 		}
 	}()
 }
@@ -135,9 +122,9 @@ func (router *Router) acceptTCP(tcpConn *net.TCPConn) {
 	startLocalConnection(connRemote, tcpConn, router, true)
 }
 
-// NewGossip constructs and returns a usable GossipChannel from the router.
+// NewGossip returns a usable GossipChannel from the router.
+//
 // TODO(pb): rename?
-// TODO(pb): move all of these methods to router.go
 func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
 	channel := newGossipChannel(channelName, router.Ourself, router.Routes, g)
 	router.gossipLock.Lock()
@@ -177,8 +164,29 @@ func (router *Router) gossipChannelSet() map[*gossipChannel]struct{} {
 	return channels
 }
 
-// SendAllGossip relays all pending gossip data for each channel via random
-// neighbours.
+func (router *Router) handleGossip(tag protocolTag, payload []byte) error {
+	decoder := gob.NewDecoder(bytes.NewReader(payload))
+	var channelName string
+	if err := decoder.Decode(&channelName); err != nil {
+		return err
+	}
+	channel := router.gossipChannel(channelName)
+	var srcName PeerName
+	if err := decoder.Decode(&srcName); err != nil {
+		return err
+	}
+	switch tag {
+	case ProtocolGossipUnicast:
+		return channel.deliverUnicast(srcName, payload, decoder)
+	case ProtocolGossipBroadcast:
+		return channel.deliverBroadcast(srcName, payload, decoder)
+	case ProtocolGossip:
+		return channel.deliver(srcName, payload, decoder)
+	}
+	return nil
+}
+
+// Relay all pending gossip data for each channel via random neighbours.
 func (router *Router) sendAllGossip() {
 	for channel := range router.gossipChannelSet() {
 		if gossip := channel.gossiper.Gossip(); gossip != nil {
@@ -187,7 +195,7 @@ func (router *Router) sendAllGossip() {
 	}
 }
 
-// SendAllGossipDown relays all pending gossip data for each channel via conn.
+// Relay all pending gossip data for each channel via conn.
 func (router *Router) sendAllGossipDown(conn Connection) {
 	for channel := range router.gossipChannelSet() {
 		if gossip := channel.gossiper.Gossip(); gossip != nil {
@@ -199,7 +207,7 @@ func (router *Router) sendAllGossipDown(conn Connection) {
 // for testing
 func (router *Router) sendPendingGossip() bool {
 	sentSomething := false
-	for conn := range router.Ourself.Connections() {
+	for conn := range router.Ourself.getConnections() {
 		sentSomething = conn.(gossipConnection).gossipSenders().Flush() || sentSomething
 	}
 	return sentSomething
@@ -253,13 +261,12 @@ func (router *Router) applyTopologyUpdate(update []byte) (peerNameSet, peerNameS
 		return nil, nil, err
 	}
 	if len(newUpdate) > 0 {
-		router.ConnectionMaker.Refresh()
-		router.Routes.Recalculate()
+		router.ConnectionMaker.refresh()
+		router.Routes.recalculate()
 	}
 	return origUpdate, newUpdate, nil
 }
 
-// Trusts returns true if the remote connection is in a trusted subnet.
 func (router *Router) trusts(remote *remoteConnection) bool {
 	if tcpAddr, err := net.ResolveTCPAddr("tcp4", remote.remoteTCPAddr); err == nil {
 		for _, trustedSubnet := range router.TrustedSubnets {
@@ -274,8 +281,8 @@ func (router *Router) trusts(remote *remoteConnection) bool {
 	return false
 }
 
-// TopologyGossipData is the set of peers in the mesh network.
-// It is gossiped just like anything else.
+// The set of peers in the mesh network.
+// Gossiped just like anything else.
 type topologyGossipData struct {
 	peers  *Peers
 	update peerNameSet

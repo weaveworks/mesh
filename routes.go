@@ -8,7 +8,7 @@ import (
 type unicastRoutes map[PeerName]PeerName
 type broadcastRoutes map[PeerName][]PeerName
 
-// Routes aggregates unicast and broadcast routes for our peer.
+// routes aggregates unicast and broadcast routes for our peer.
 type routes struct {
 	sync.RWMutex
 	ourself      *localPeer
@@ -18,14 +18,14 @@ type routes struct {
 	unicastAll   unicastRoutes // [1]
 	broadcast    broadcastRoutes
 	broadcastAll broadcastRoutes // [1]
-	recalculate  chan<- *struct{}
+	recalc       chan<- *struct{}
 	wait         chan<- chan struct{}
 	action       chan<- func()
 	// [1] based on *all* connections, not just established &
 	// symmetric ones
 }
 
-// NewRoutes returns a usable Routes based on the LocalPeer and existing Peers.
+// newRoutes returns a usable Routes based on the LocalPeer and existing Peers.
 func newRoutes(ourself *localPeer, peers *Peers) *routes {
 	recalculate := make(chan *struct{}, 1)
 	wait := make(chan chan struct{})
@@ -37,7 +37,7 @@ func newRoutes(ourself *localPeer, peers *Peers) *routes {
 		unicastAll:   unicastRoutes{ourself.Name: UnknownPeerName},
 		broadcast:    broadcastRoutes{ourself.Name: []PeerName{}},
 		broadcastAll: broadcastRoutes{ourself.Name: []PeerName{}},
-		recalculate:  recalculate,
+		recalc:       recalculate,
 		wait:         wait,
 		action:       action,
 	}
@@ -131,7 +131,7 @@ func (r *routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoutes, es
 // sparsely connected peers this function returns a higher proportion of
 // neighbours than elsewhere. In extremis, on peers with fewer than
 // log2(n_peers) neighbours, all neighbours are returned.
-func (r *routes) RandomNeighbours(except PeerName) []PeerName {
+func (r *routes) randomNeighbours(except PeerName) []PeerName {
 	destinations := make(peerNameSet)
 	r.RLock()
 	defer r.RUnlock()
@@ -155,18 +155,18 @@ func (r *routes) RandomNeighbours(except PeerName) []PeerName {
 // Recalculate requests recalculation of the routing table. This is async but
 // can effectively be made synchronous with a subsequent call to
 // EnsureRecalculated.
-func (r *routes) Recalculate() {
+func (r *routes) recalculate() {
 	// The use of a 1-capacity channel in combination with the
 	// non-blocking send is an optimisation that results in multiple
 	// requests being coalesced.
 	select {
-	case r.recalculate <- nil:
+	case r.recalc <- nil:
 	default:
 	}
 }
 
 // EnsureRecalculated waits for any preceding Recalculate requests to finish.
-func (r *routes) EnsureRecalculated() {
+func (r *routes) ensureRecalculated() {
 	done := make(chan struct{})
 	r.wait <- done
 	<-done

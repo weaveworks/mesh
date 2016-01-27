@@ -109,11 +109,9 @@ func (peer *Peer) routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 	return false, routes
 }
 
-// ForEachConnectedPeer applies f to all peers reachable by peer. If
-// establishedAndSymmetric is true, only peers with established bidirectional
-// connections will be selected. The exclude maps is treated as a set of
-// remote peers to blacklist.
-// TODO(pb): change exclude to map[PeerName]struct{}?
+// Apply f to all peers reachable by peer. If establishedAndSymmetric is true,
+// only peers with established bidirectional connections will be selected. The
+// exclude maps is treated as a set of remote peers to blacklist.
 func (peer *Peer) forEachConnectedPeer(establishedAndSymmetric bool, exclude map[PeerName]PeerName, f func(*Peer)) {
 	for remoteName, conn := range peer.connections {
 		if establishedAndSymmetric && !conn.isEstablished() {
@@ -151,11 +149,8 @@ func randomPeerUID() PeerUID {
 // randomly assigned, but we detect and recover from collisions. This
 // does limit us to 4096 peers, but that should be sufficient for a
 // while.
-// TODO(pb): does this need to be exported?
 type PeerShortID uint16
 
-// PeerShortIDBits is the usable bitsize of a PeerShortID.
-// TODO(pb): does this need to be exported?
 const peerShortIDBits = 12
 
 func randomPeerShortID() PeerShortID {
@@ -179,7 +174,6 @@ func randUint16() (r uint16) {
 }
 
 // ListOfPeers implements sort.Interface on a slice of Peers.
-// TODO(pb): does this need to be exported?
 type listOfPeers []*Peer
 
 // Len implements sort.Interface.

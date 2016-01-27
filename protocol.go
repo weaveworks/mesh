@@ -23,15 +23,12 @@ const (
 )
 
 var (
-	// ProtocolBytes is the protocol identifier in byte-slice form.
 	protocolBytes = []byte(Protocol)
 
-	// HeaderTimeout defines how long we're willing to wait for the handshake
-	// phase of protocol negotiation.
+	// How long we wait for the handshake phase of protocol negotiation.
 	headerTimeout = 10 * time.Second
 
-	// ProtocolV1Features enumerate all of the version 1 features, so they may
-	// be special-cased the introduction phase. See filterV1Features.
+	// See filterV1Features.
 	protocolV1Features = []string{
 		"ConnID",
 		"Name",
@@ -40,24 +37,12 @@ var (
 		"UID",
 	}
 
-	// ErrExpectedCrypto is returned by the handshake when this peer expects
-	// to do encryption, but remote peers do not.
-	errExpectedCrypto = fmt.Errorf("password specified, but peer requested an unencrypted connection")
-
-	// ErrExpectedNoCrypto is returned by the handshake when this peer does
-	// not expect to do encryption, but remote peers do.
+	errExpectedCrypto   = fmt.Errorf("password specified, but peer requested an unencrypted connection")
 	errExpectedNoCrypto = fmt.Errorf("no password specificed, but peer requested an encrypted connection")
 )
 
-// ProtocolIntroConn collect the parts of the net.TCPConn we require to do the
-// protocol intro, to support testing.
-// TODO(pb): does this need to be exported?
 type protocolIntroConn interface {
-	// io.Reader
-	Read(b []byte) (n int, err error)
-
-	// io.Writer
-	Write(b []byte) (n int, err error)
+	io.ReadWriter
 
 	// net.Conn's deadline methods
 	SetDeadline(t time.Time) error
@@ -65,8 +50,7 @@ type protocolIntroConn interface {
 	SetWriteDeadline(t time.Time) error
 }
 
-// ProtocolIntroParams capture the params necessary to negotiate a protocol
-// intro with a remote peer.
+// The params necessary to negotiate a protocol intro with a remote peer.
 type protocolIntroParams struct {
 	MinVersion byte
 	MaxVersion byte
@@ -76,7 +60,7 @@ type protocolIntroParams struct {
 	Outbound   bool
 }
 
-// ProtocolIntroResults capture the results from a successful protocol intro.
+// The results from a successful protocol intro.
 type protocolIntroResults struct {
 	Features   map[string]string
 	Receiver   tcpReceiver
@@ -86,8 +70,7 @@ type protocolIntroResults struct {
 }
 
 // DoIntro executes the protocol introduction.
-// TODO(pb): eliminate named return params?
-func (params protocolIntroParams) DoIntro() (res protocolIntroResults, err error) {
+func (params protocolIntroParams) doIntro() (res protocolIntroResults, err error) {
 	if err = params.Conn.SetDeadline(time.Now().Add(headerTimeout)); err != nil {
 		return
 	}
@@ -376,7 +359,6 @@ type protocolMsg struct {
 	msg []byte
 }
 
-// ProtocolSender describes anything that can emit a ProtocolMsg on the wire.
 type protocolSender interface {
 	SendProtocolMsg(m protocolMsg) error
 }

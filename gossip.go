@@ -61,8 +61,8 @@ type gossipSender struct {
 	sender           protocolSender
 	gossip           GossipData
 	broadcasts       map[PeerName]GossipData
-	more             chan<- struct{}
-	flush            chan<- chan<- bool // for testing
+	more             chan struct{}
+	flush            chan chan<- bool // for testing
 }
 
 // NewGossipSender constructs a usable GossipSender.
@@ -72,37 +72,36 @@ func newGossipSender(
 	sender protocolSender,
 	stop <-chan struct{},
 ) *gossipSender {
-	more := make(chan struct{}, 1)
-	flush := make(chan chan<- bool)
 	s := &gossipSender{
 		makeMsg:          makeMsg,
 		makeBroadcastMsg: makeBroadcastMsg,
 		sender:           sender,
 		broadcasts:       make(map[PeerName]GossipData),
-		more:             more,
-		flush:            flush}
-	go s.run(stop, more, flush)
+		more:             make(chan struct{}, 1),
+		flush:            make(chan chan<- bool),
+	}
+	go s.run(stop)
 	return s
 }
 
 // TODO(pb): no need to parameterize more and flush
-func (s *gossipSender) run(stop <-chan struct{}, more <-chan struct{}, flush <-chan chan<- bool) {
+func (s *gossipSender) run(stop <-chan struct{}) {
 	sent := false
 	for {
 		select {
 		case <-stop:
 			return
-		case <-more:
+		case <-s.more:
 			sentSomething, err := s.deliver(stop)
 			if err != nil {
 				return
 			}
 			sent = sent || sentSomething
-		case ch := <-flush: // for testing
+		case ch := <-s.flush: // for testing
 			// send anything pending, then reply back whether we sent
 			// anything since previous flush
 			select {
-			case <-more:
+			case <-s.more:
 				sentSomething, err := s.deliver(stop)
 				if err != nil {
 					return
@@ -221,7 +220,11 @@ type gossipSenders struct {
 // NewGossipSenders returns a usable GossipSenders leveraging the ProtocolSender.
 // TODO(pb): is stop chan the best way to do that?
 func newGossipSenders(sender protocolSender, stop <-chan struct{}) *gossipSenders {
-	return &gossipSenders{sender: sender, stop: stop, senders: make(map[string]*gossipSender)}
+	return &gossipSenders{
+		sender:  sender,
+		stop:    stop,
+		senders: make(map[string]*gossipSender),
+	}
 }
 
 // Sender yields the GossipSender for the named channel.
@@ -249,7 +252,6 @@ func (gs *gossipSenders) Flush() bool {
 }
 
 // GossipChannels is an index of channel name to gossip channel.
-// TODO(pb): does this need to be exported?
 type gossipChannels map[string]*gossipChannel
 
 type gossipConnection interface {

@@ -36,7 +36,7 @@ func connPair() (protocolIntroConn, protocolIntroConn) {
 func doIntro(t *testing.T, params protocolIntroParams) <-chan protocolIntroResults {
 	ch := make(chan protocolIntroResults, 1)
 	go func() {
-		res, err := params.DoIntro()
+		res, err := params.doIntro()
 		require.Nil(t, err)
 		ch <- res
 	}()

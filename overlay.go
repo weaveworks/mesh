@@ -6,14 +6,14 @@ import (
 
 // Overlay yields OverlayConnections.
 type Overlay interface {
-	// Enhance a features map with overlay-related features
+	// Enhance a features map with overlay-related features.
 	AddFeaturesTo(map[string]string)
 
 	// Prepare on overlay connection. The connection should remain
 	// passive until it has been Confirm()ed.
 	PrepareConnection(OverlayConnectionParams) (OverlayConnection, error)
 
-	// Obtain diagnostic information specific to the overlay
+	// Obtain diagnostic information specific to the overlay.
 	Diagnostics() interface{}
 }
 

@@ -1,7 +1,6 @@
 package mesh
 
-// SurrogateGossiper ignores unicasts and relays broadcasts and gossips.
-// TODO(pb): should this be exported?
+// surrogateGossiper ignores unicasts and relays broadcasts and gossips.
 type surrogateGossiper struct{}
 
 var _ Gossiper = &surrogateGossiper{}
@@ -26,15 +25,13 @@ func (*surrogateGossiper) OnGossip(update []byte) (GossipData, error) {
 	return newSurrogateGossipData(update), nil
 }
 
-// SurrogateGossipData is a simple in-memory GossipData.
-// TODO(pb): should this be exported?
+// surrogateGossipData is a simple in-memory GossipData.
 type surrogateGossipData struct {
 	messages [][]byte
 }
 
 var _ GossipData = &surrogateGossipData{}
 
-// NewSurrogateGossipData returns a new SurrogateGossipData.
 func newSurrogateGossipData(msg []byte) *surrogateGossipData {
 	return &surrogateGossipData{messages: [][]byte{msg}}
 }

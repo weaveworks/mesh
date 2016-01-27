@@ -21,8 +21,6 @@ type Peers struct {
 	onInvalidateShortIDs []func()
 }
 
-// ShortIDPeers is a short reference type used internally within Peers.
-// TODO(pb): unexport
 type shortIDPeers struct {
 	// If we know about a single peer with the short ID, this is
 	// that peer. If there is a collision, this is the peer with
@@ -33,11 +31,8 @@ type shortIDPeers struct {
 	others []*Peer
 }
 
-// PeerNameSet is a set of PeerNames used internally throughout mesh.
-// TODO(pb): does this need to be exported?
 type peerNameSet map[PeerName]struct{}
 
-// ConnectionSummary collects details about a connection.
 type connectionSummary struct {
 	NameByte      []byte
 	RemoteTCPAddr string
@@ -45,9 +40,8 @@ type connectionSummary struct {
 	Established   bool
 }
 
-// PeersPendingNotifications due to changes to Peers that need to be sent out
+// Due to changes to Peers that need to be sent out
 // once the Peers is unlocked.
-// TODO(pb): unexport
 type peersPendingNotifications struct {
 	// Peers that have been GCed
 	removed []*Peer
@@ -62,7 +56,6 @@ type peersPendingNotifications struct {
 	localPeerModified bool
 }
 
-// NewPeers constructs a new, empty Peers.
 func newPeers(ourself *localPeer) *Peers {
 	peers := &Peers{
 		ourself:   ourself,
@@ -268,7 +261,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	}
 }
 
-// FetchWithDefault will use reference fields of the passed peer object to
+// fetchWithDefault will use reference fields of the passed peer object to
 // look up and return an existing, matching peer. If no matching peer is
 // found, the passed peer is saved and returned.
 func (peers *Peers) fetchWithDefault(peer *Peer) *Peer {
@@ -295,8 +288,7 @@ func (peers *Peers) Fetch(name PeerName) *Peer {
 	return peers.byName[name]
 }
 
-// FetchAndAddRef returns a peer matching the passed name, and increments its
-// refcount. If no matching peer is found, FetchAndAddRef returns nil.
+// Like fetch, but increments local refcount.
 func (peers *Peers) fetchAndAddRef(name PeerName) *Peer {
 	peers.Lock()
 	defer peers.Unlock()
@@ -323,7 +315,6 @@ func (peers *Peers) dereference(peer *Peer) {
 	peer.localRefCount--
 }
 
-// ForEach applies fun to each peer under a read lock.
 func (peers *Peers) forEach(fun func(*Peer)) {
 	peers.RLock()
 	defer peers.RUnlock()
@@ -332,7 +323,7 @@ func (peers *Peers) forEach(fun func(*Peer)) {
 	}
 }
 
-// ApplyUpdate merges an incoming update with our own topology.
+// Merge an incoming update with our own topology.
 //
 // We add peers hitherto unknown to us, and update peers for which the
 // update contains a more recent version than known to us. The return
@@ -380,7 +371,6 @@ func (peers *Peers) names() peerNameSet {
 	return names
 }
 
-// EncodePeers returns a Gob-encoded set of known peers.
 func (peers *Peers) encodePeers(names peerNameSet) []byte {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
@@ -389,7 +379,7 @@ func (peers *Peers) encodePeers(names peerNameSet) []byte {
 	for name := range names {
 		if peer, found := peers.byName[name]; found {
 			if peer == peers.ourself.Peer {
-				peers.ourself.Encode(enc)
+				peers.ourself.encode(enc)
 			} else {
 				peer.encode(enc)
 			}
@@ -512,7 +502,6 @@ func (peers *Peers) applyDecodedUpdate(decodedUpdate []*Peer, decodedConns [][]c
 	return newUpdate
 }
 
-// Encode writes the peer to the encoder.
 func (peer *Peer) encode(enc *gob.Encoder) {
 	if err := enc.Encode(peer.peerSummary); err != nil {
 		log.Fatal(err)

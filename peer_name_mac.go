@@ -30,20 +30,20 @@ type PeerName uint64
 const (
 	// PeerNameFlavour is the type of peer names we use.
 	PeerNameFlavour = "mac"
+
 	// NameSize is the number of bytes in a peer name.
 	NameSize = 6
+
 	// UnknownPeerName is used as a sentinel value.
 	UnknownPeerName = PeerName(0)
 )
 
 // PeerNameFromUserInput parses PeerName from a user-provided string.
-// TODO(pb): does this need to be exported?
 func PeerNameFromUserInput(userInput string) (PeerName, error) {
 	return PeerNameFromString(userInput)
 }
 
 // PeerNameFromString parses PeerName from a generic string.
-// TODO(pb): does this need to be exported?
 func PeerNameFromString(nameStr string) (PeerName, error) {
 	mac, err := net.ParseMAC(nameStr)
 	if err != nil {
@@ -53,7 +53,6 @@ func PeerNameFromString(nameStr string) (PeerName, error) {
 }
 
 // PeerNameFromBin parses PeerName from a byte slice.
-// TODO(pb): does this need to be exported?
 func PeerNameFromBin(nameByte []byte) PeerName {
 	return PeerName(macint(net.HardwareAddr(nameByte)))
 }

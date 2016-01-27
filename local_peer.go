@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// LocalPeer is the only "active" peer in the mesh. It extends Peer with
+// localPeer is the only "active" peer in the mesh. It extends Peer with
 // additional behaviors, mostly to retrieve and manage connection state.
 type localPeer struct {
 	sync.RWMutex
@@ -18,11 +18,10 @@ type localPeer struct {
 	actionChan chan<- localPeerAction
 }
 
-// LocalPeerAction is the actor closure used by LocalPeer.
-// TODO(pb): does this need to be exported?
+// The actor closure used by localPeer.
 type localPeerAction func()
 
-// NewLocalPeer returns a usable LocalPeer.
+// newLocalPeer returns a usable LocalPeer.
 func newLocalPeer(name PeerName, nickName string, router *Router) *localPeer {
 	actionChan := make(chan localPeerAction, ChannelSize)
 	peer := &localPeer{
@@ -35,7 +34,7 @@ func newLocalPeer(name PeerName, nickName string, router *Router) *localPeer {
 }
 
 // Connections returns all the connections that the local peer is aware of.
-func (peer *localPeer) Connections() connectionSet {
+func (peer *localPeer) getConnections() connectionSet {
 	connections := make(connectionSet)
 	peer.RLock()
 	defer peer.RUnlock()
@@ -46,6 +45,9 @@ func (peer *localPeer) Connections() connectionSet {
 }
 
 // ConnectionTo returns the connection to the named peer, if any.
+//
+// TODO(pb): Weave Net invokes router.Ourself.ConnectionTo;
+// it may be better to provide that on Router directly.
 func (peer *localPeer) ConnectionTo(name PeerName) (Connection, bool) {
 	peer.RLock()
 	defer peer.RUnlock()
@@ -54,6 +56,9 @@ func (peer *localPeer) ConnectionTo(name PeerName) (Connection, bool) {
 }
 
 // ConnectionsTo returns all known connections to the named peers.
+//
+// TODO(pb): Weave Net invokes router.Ourself.ConnectionsTo;
+// it may be better to provide that on Router directly.
 func (peer *localPeer) ConnectionsTo(names []PeerName) []Connection {
 	if len(names) == 0 {
 		return nil
@@ -73,7 +78,7 @@ func (peer *localPeer) ConnectionsTo(names []PeerName) []Connection {
 
 // CreateConnection creates a new connection to peerAddr. If acceptNewPeer is
 // false, peerAddr must already be a member of the mesh.
-func (peer *localPeer) CreateConnection(peerAddr string, acceptNewPeer bool) error {
+func (peer *localPeer) createConnection(peerAddr string, acceptNewPeer bool) error {
 	if err := peer.checkConnectionLimit(); err != nil {
 		return err
 	}
@@ -92,8 +97,8 @@ func (peer *localPeer) CreateConnection(peerAddr string, acceptNewPeer bool) err
 
 // ACTOR client API
 
-// AddConnection adds the connection to the peer. Synchronous.
-func (peer *localPeer) AddConnection(conn *LocalConnection) error {
+// Synchronous.
+func (peer *localPeer) doAddConnection(conn *LocalConnection) error {
 	resultChan := make(chan error)
 	peer.actionChan <- func() {
 		resultChan <- peer.handleAddConnection(conn)
@@ -101,16 +106,15 @@ func (peer *localPeer) AddConnection(conn *LocalConnection) error {
 	return <-resultChan
 }
 
-// ConnectionEstablished marks the connection as established within the peer.
 // Asynchronous.
-func (peer *localPeer) ConnectionEstablished(conn *LocalConnection) {
+func (peer *localPeer) doConnectionEstablished(conn *LocalConnection) {
 	peer.actionChan <- func() {
 		peer.handleConnectionEstablished(conn)
 	}
 }
 
-// DeleteConnection removes the connection from the peer. Synchronous.
-func (peer *localPeer) DeleteConnection(conn *LocalConnection) {
+// Synchronous.
+func (peer *localPeer) doDeleteConnection(conn *LocalConnection) {
 	resultChan := make(chan interface{})
 	peer.actionChan <- func() {
 		peer.handleDeleteConnection(conn)
@@ -119,8 +123,7 @@ func (peer *localPeer) DeleteConnection(conn *LocalConnection) {
 	<-resultChan
 }
 
-// Encode writes the peer to the encoder.
-func (peer *localPeer) Encode(enc *gob.Encoder) {
+func (peer *localPeer) encode(enc *gob.Encoder) {
 	peer.RLock()
 	defer peer.RUnlock()
 	peer.Peer.encode(enc)
@@ -179,7 +182,7 @@ func (peer *localPeer) handleAddConnection(conn Connection) error {
 		peer.router.sendAllGossipDown(conn)
 	}
 
-	peer.router.Routes.Recalculate()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate(conn.Remote())
 
 	return nil
@@ -196,7 +199,7 @@ func (peer *localPeer) handleConnectionEstablished(conn Connection) {
 	peer.connectionEstablished(conn)
 	conn.log("connection fully established")
 
-	peer.router.Routes.Recalculate()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
@@ -216,7 +219,7 @@ func (peer *localPeer) handleDeleteConnection(conn Connection) {
 	// Must do garbage collection first to ensure we don't send out an
 	// update with unreachable peers (can cause looping)
 	peer.router.Peers.GarbageCollect()
-	peer.router.Routes.Recalculate()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 

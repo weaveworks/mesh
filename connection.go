@@ -43,9 +43,11 @@ func newRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, establis
 	}
 }
 
+func (conn *remoteConnection) Remote() *Peer { return conn.remote }
+
 func (conn *remoteConnection) getLocal() *Peer { return conn.local }
 
-func (conn *remoteConnection) Remote() *Peer { return conn.remote }
+func (conn *remoteConnection) breakTie(Connection) connectionTieBreak { return tieBreakTied }
 
 func (conn *remoteConnection) remoteTCPAddress() string { return conn.remoteTCPAddr }
 
@@ -59,11 +61,11 @@ func (conn *remoteConnection) log(args ...interface{}) {
 	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
-func (conn *remoteConnection) breakTie(Connection) connectionTieBreak { return tieBreakTied }
-
-// LocalConnection is the local side of a connection. It implements
-// ProtocolSender, and manages per-channel GossipSenders.
+// LocalConnection is the local (our) side of a connection.
+// It implements ProtocolSender, and manages per-channel GossipSenders.
 type LocalConnection struct {
+	OverlayConn OverlayConnection
+
 	mtx sync.RWMutex
 	remoteConnection
 	tcpConn         *net.TCPConn
@@ -78,7 +80,6 @@ type LocalConnection struct {
 	actionChan      chan<- connectionAction
 	errorChan       chan<- error
 	finished        <-chan struct{} // closed to signal that actorLoop has finished
-	OverlayConn     OverlayConnection
 	senders         *gossipSenders
 }
 
@@ -143,8 +144,7 @@ func (conn *LocalConnection) gossipSenders() *gossipSenders {
 // do not need locks for reading, and only need write locks for fields
 // read by other processes.
 
-// Shutdown is non-blocking.
-// TODO(pb): must be?
+// Non-blocking.
 func (conn *LocalConnection) shutdown(err error) {
 	// err should always be a real error, even if only io.EOF
 	if err == nil {
@@ -157,9 +157,8 @@ func (conn *LocalConnection) shutdown(err error) {
 	}
 }
 
-// Send an actor request to the actorLoop, but don't block if
-// actorLoop has exited - see http://blog.golang.org/pipelines for
-// pattern
+// Send an actor request to the actorLoop, but don't block if actorLoop has
+// exited. See http://blog.golang.org/pipelines for pattern.
 func (conn *LocalConnection) sendAction(action connectionAction) {
 	select {
 	case conn.actionChan <- action:
@@ -185,7 +184,7 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 		Conn:       conn.tcpConn,
 		Password:   conn.router.Password,
 		Outbound:   conn.outbound,
-	}.DoIntro()
+	}.doIntro()
 	if err != nil {
 		return
 	}
@@ -228,10 +227,10 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 	// As soon as we do AddConnection, the new connection becomes
 	// visible to the packet routing logic.  So AddConnection must
 	// come after PrepareConnection
-	if err = conn.router.Ourself.AddConnection(conn); err != nil {
+	if err = conn.router.Ourself.doAddConnection(conn); err != nil {
 		return
 	}
-	conn.router.ConnectionMaker.ConnectionCreated(conn)
+	conn.router.ConnectionMaker.connectionCreated(conn)
 
 	// OverlayConnection confirmation comes after AddConnection,
 	// because only after that completes do we know the connection is
@@ -367,7 +366,7 @@ func (conn *LocalConnection) actorLoop(actionChan <-chan connectionAction, error
 			case <-fwdEstablishedChan:
 				conn.established = true
 				fwdEstablishedChan = nil
-				conn.router.Ourself.ConnectionEstablished(conn)
+				conn.router.Ourself.doConnectionEstablished(conn)
 			case err = <-errorChan:
 			case err = <-fwdErrorChan:
 			}
@@ -392,7 +391,7 @@ func (conn *LocalConnection) teardown(err error) {
 
 	if conn.remote != nil {
 		conn.router.Peers.dereference(conn.remote)
-		conn.router.Ourself.DeleteConnection(conn)
+		conn.router.Ourself.doDeleteConnection(conn)
 	}
 
 	if conn.heartbeatTCP != nil {
@@ -403,7 +402,7 @@ func (conn *LocalConnection) teardown(err error) {
 		conn.OverlayConn.Stop()
 	}
 
-	conn.router.ConnectionMaker.ConnectionTerminated(conn, err)
+	conn.router.ConnectionMaker.connectionTerminated(conn, err)
 }
 
 func (conn *LocalConnection) sendOverlayControlMessage(tag byte, msg []byte) error {
@@ -460,7 +459,6 @@ func (conn *LocalConnection) extendReadDeadline() error {
 
 // Untrusted returns true if either we don't trust our remote, or are not
 // trusted by our remote.
-// TODO(pb): does this need to be exported?
 func (conn *LocalConnection) untrusted() bool {
 	return !conn.trustRemote || !conn.trustedByRemote
 }
