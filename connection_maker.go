@@ -102,7 +102,7 @@ func (cm *ConnectionMaker) InitiateConnections(peers []string, replace bool) []e
 			port = "0" // we use that as an indication that "no port was supplied"
 		}
 		if !isAlnum(port) {
-			errors = append(errors, fmt.Errorf("invalid peer name '%s', should just be host[:port]", peer))
+			errors = append(errors, fmt.Errorf("invalid peer name %q, should just be host[:port]", peer))
 		} else if addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("%s:%s", host, port)); err != nil {
 			errors = append(errors, err)
 		} else {
