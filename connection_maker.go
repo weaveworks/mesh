@@ -21,6 +21,7 @@ type peerAddrs map[string]*net.TCPAddr
 type connectionMaker struct {
 	ourself     *localPeer
 	peers       *Peers
+	localAddr   string
 	port        int
 	discovery   bool
 	targets     map[string]*target
@@ -51,13 +52,15 @@ type target struct {
 // relevant candidates.
 type connectionMakerAction func() bool
 
-// newConnectionMaker returns a usable ConnectionMaker, seeded with peers,
-// listening on port. If discovery is true, ConnectionMaker will attempt to
+// newConnectionMaker returns a usable ConnectionMaker, seeded with
+// peers, making outbound connections from localAddr, and listening on
+// port. If discovery is true, ConnectionMaker will attempt to
 // initiate new connections with peers it's not directly connected to.
-func newConnectionMaker(ourself *localPeer, peers *Peers, port int, discovery bool) *connectionMaker {
+func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool) *connectionMaker {
 	cm := &connectionMaker{
 		ourself:     ourself,
 		peers:       peers,
+		localAddr:   localAddr,
 		port:        port,
 		discovery:   discovery,
 		directPeers: peerAddrs{},
@@ -332,7 +335,7 @@ func (cm *connectionMaker) connectToTargets(validTarget map[string]struct{}, dir
 
 func (cm *connectionMaker) attemptConnection(address string, acceptNewPeer bool) {
 	log.Printf("->[%s] attempting connection", address)
-	if err := cm.ourself.createConnection(address, acceptNewPeer); err != nil {
+	if err := cm.ourself.createConnection(cm.localAddr, address, acceptNewPeer); err != nil {
 		log.Printf("->[%s] error during connection attempt: %v", address, err)
 		cm.connectionAborted(address, err)
 	}

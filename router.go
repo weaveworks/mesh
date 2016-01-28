@@ -31,6 +31,7 @@ const (
 // Config defines dimensions of configuration for the router.
 // TODO(pb): provide usable defaults in NewRouter
 type Config struct {
+	Host               string
 	Port               int
 	ProtocolMinVersion byte
 	Password           []byte
@@ -69,7 +70,7 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay) *
 		log.Println("Removed unreachable peer", peer)
 	})
 	router.Routes = newRoutes(router.Ourself, router.Peers)
-	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, router.Port, router.PeerDiscovery)
+	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, net.JoinHostPort(router.Host, "0"), router.Port, router.PeerDiscovery)
 	router.topologyGossip = router.NewGossip("topology", router)
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
 
@@ -79,7 +80,7 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay) *
 // Start listening for TCP connections. This is separate from NewRouter so
 // that gossipers can register before we start forming connections.
 func (router *Router) Start() {
-	router.listenTCP(router.Port)
+	router.listenTCP()
 }
 
 // Stop shuts down the router. In theory.
@@ -92,8 +93,8 @@ func (router *Router) usingPassword() bool {
 	return router.Password != nil
 }
 
-func (router *Router) listenTCP(localPort int) {
-	localAddr, err := net.ResolveTCPAddr("tcp4", fmt.Sprint(":", localPort))
+func (router *Router) listenTCP() {
+	localAddr, err := net.ResolveTCPAddr("tcp4", net.JoinHostPort(router.Host, fmt.Sprint(router.Port)))
 	if err != nil {
 		log.Fatal(err)
 	}
