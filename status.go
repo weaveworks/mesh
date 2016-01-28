@@ -6,43 +6,43 @@ import (
 )
 
 // Status is our current state as a peer, as taken from a router.
+// This is designed to be used as diagnostic information.
 type Status struct {
-	Name string
-
-	protocol           string
-	protocolMinVersion int
-	protocolMaxVersion int
-	encryption         bool
-	peerDiscovery      bool
-	nickName           string
-	port               int
-	peers              []PeerStatus
-	unicastRoutes      []unicastRouteStatus
-	broadcastRoutes    []broadcastRouteStatus
-	connections        []LocalConnectionStatus
-	targets            []string
-	overlayDiagnostics interface{}
-	trustedSubnets     []string
+	Protocol           string
+	ProtocolMinVersion int
+	ProtocolMaxVersion int
+	Encryption         bool
+	PeerDiscovery      bool
+	Name               string
+	NickName           string
+	Port               int
+	Peers              []PeerStatus
+	UnicastRoutes      []unicastRouteStatus
+	BroadcastRoutes    []broadcastRouteStatus
+	Connections        []LocalConnectionStatus
+	Targets            []string
+	OverlayDiagnostics interface{}
+	TrustedSubnets     []string
 }
 
 // NewStatus returns a Status object, taken as a snapshot from the router.
 func NewStatus(router *Router) *Status {
 	return &Status{
+		Protocol:           Protocol,
+		ProtocolMinVersion: ProtocolMinVersion,
+		ProtocolMaxVersion: ProtocolMaxVersion,
+		Encryption:         router.usingPassword(),
+		PeerDiscovery:      router.PeerDiscovery,
 		Name:               router.Ourself.Name.String(),
-		protocol:           Protocol,
-		protocolMinVersion: ProtocolMinVersion,
-		protocolMaxVersion: ProtocolMaxVersion,
-		encryption:         router.usingPassword(),
-		peerDiscovery:      router.PeerDiscovery,
-		nickName:           router.Ourself.NickName,
-		port:               router.Port,
-		peers:              makePeerStatusSlice(router.Peers),
-		unicastRoutes:      makeUnicastRouteStatusSlice(router.Routes),
-		broadcastRoutes:    makeBroadcastRouteStatusSlice(router.Routes),
-		connections:        makeLocalConnectionStatusSlice(router.ConnectionMaker),
-		targets:            makeTargetSlice(router.ConnectionMaker),
-		overlayDiagnostics: router.Overlay.Diagnostics(),
-		trustedSubnets:     makeTrustedSubnetsSlice(router.TrustedSubnets),
+		NickName:           router.Ourself.NickName,
+		Port:               router.Port,
+		Peers:              makePeerStatusSlice(router.Peers),
+		UnicastRoutes:      makeUnicastRouteStatusSlice(router.Routes),
+		BroadcastRoutes:    makeBroadcastRouteStatusSlice(router.Routes),
+		Connections:        makeLocalConnectionStatusSlice(router.ConnectionMaker),
+		Targets:            makeTargetSlice(router.ConnectionMaker),
+		OverlayDiagnostics: router.Overlay.Diagnostics(),
+		TrustedSubnets:     makeTrustedSubnetsSlice(router.TrustedSubnets),
 	}
 }
 
