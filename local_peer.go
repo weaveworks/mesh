@@ -76,17 +76,22 @@ func (peer *localPeer) ConnectionsTo(names []PeerName) []Connection {
 	return conns
 }
 
-// CreateConnection creates a new connection to peerAddr. If acceptNewPeer is
-// false, peerAddr must already be a member of the mesh.
-func (peer *localPeer) createConnection(peerAddr string, acceptNewPeer bool) error {
+// createConnection creates a new connection, originating from
+// localAddr, to peerAddr. If acceptNewPeer is false, peerAddr must
+// already be a member of the mesh.
+func (peer *localPeer) createConnection(localAddr string, peerAddr string, acceptNewPeer bool) error {
 	if err := peer.checkConnectionLimit(); err != nil {
 		return err
 	}
-	tcpAddr, err := net.ResolveTCPAddr("tcp4", peerAddr)
+	localTCPAddr, err := net.ResolveTCPAddr("tcp4", localAddr)
 	if err != nil {
 		return err
 	}
-	tcpConn, err := net.DialTCP("tcp4", nil, tcpAddr)
+	remoteTCPAddr, err := net.ResolveTCPAddr("tcp4", peerAddr)
+	if err != nil {
+		return err
+	}
+	tcpConn, err := net.DialTCP("tcp4", localTCPAddr, remoteTCPAddr)
 	if err != nil {
 		return err
 	}
