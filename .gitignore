@@ -28,4 +28,4 @@ Makefile
 Dockerfile
 
 examples/increment-only-counter/increment-only-counter
-
+examples/raft-on-mesh/raft-on-mesh
