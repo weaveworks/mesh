@@ -61,8 +61,8 @@ type gossipSender struct {
 	sender           protocolSender
 	gossip           GossipData
 	broadcasts       map[PeerName]GossipData
-	more             chan struct{}
-	flush            chan chan<- bool // for testing
+	more             chan<- struct{}
+	flush            chan<- chan<- bool // for testing
 }
 
 // NewGossipSender constructs a usable GossipSender.
@@ -72,36 +72,37 @@ func newGossipSender(
 	sender protocolSender,
 	stop <-chan struct{},
 ) *gossipSender {
+	more := make(chan struct{}, 1)
+	flush := make(chan chan<- bool)
 	s := &gossipSender{
 		makeMsg:          makeMsg,
 		makeBroadcastMsg: makeBroadcastMsg,
 		sender:           sender,
 		broadcasts:       make(map[PeerName]GossipData),
-		more:             make(chan struct{}, 1),
-		flush:            make(chan chan<- bool),
+		more:             more,
+		flush:            flush,
 	}
-	go s.run(stop)
+	go s.run(stop, more, flush)
 	return s
 }
 
-// TODO(pb): no need to parameterize more and flush
-func (s *gossipSender) run(stop <-chan struct{}) {
+func (s *gossipSender) run(stop <-chan struct{}, more <-chan struct{}, flush <-chan chan<- bool) {
 	sent := false
 	for {
 		select {
 		case <-stop:
 			return
-		case <-s.more:
+		case <-more:
 			sentSomething, err := s.deliver(stop)
 			if err != nil {
 				return
 			}
 			sent = sent || sentSomething
-		case ch := <-s.flush: // for testing
+		case ch := <-flush: // for testing
 			// send anything pending, then reply back whether we sent
 			// anything since previous flush
 			select {
-			case <-s.more:
+			case <-more:
 				sentSomething, err := s.deliver(stop)
 				if err != nil {
 					return

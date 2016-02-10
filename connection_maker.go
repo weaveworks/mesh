@@ -27,7 +27,7 @@ type connectionMaker struct {
 	targets     map[string]*target
 	connections map[Connection]struct{}
 	directPeers peerAddrs
-	actionChan  chan connectionMakerAction
+	actionChan  chan<- connectionMakerAction
 }
 
 // TargetState describes the connection state of a remote target.
@@ -57,6 +57,7 @@ type connectionMakerAction func() bool
 // port. If discovery is true, ConnectionMaker will attempt to
 // initiate new connections with peers it's not directly connected to.
 func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool) *connectionMaker {
+	actionChan := make(chan connectionMakerAction, ChannelSize)
 	cm := &connectionMaker{
 		ourself:     ourself,
 		peers:       peers,
@@ -66,9 +67,9 @@ func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port
 		directPeers: peerAddrs{},
 		targets:     make(map[string]*target),
 		connections: make(map[Connection]struct{}),
-		actionChan:  make(chan connectionMakerAction, ChannelSize),
+		actionChan:  actionChan,
 	}
-	go cm.queryLoop()
+	go cm.queryLoop(actionChan)
 	return cm
 }
 
@@ -189,12 +190,12 @@ func (cm *connectionMaker) refresh() {
 	cm.actionChan <- func() bool { return true }
 }
 
-func (cm *connectionMaker) queryLoop() {
+func (cm *connectionMaker) queryLoop(actionChan <-chan connectionMakerAction) {
 	timer := time.NewTimer(maxDuration)
 	run := func() { timer.Reset(cm.checkStateAndAttemptConnections()) }
 	for {
 		select {
-		case action := <-cm.actionChan:
+		case action := <-actionChan:
 			if action() {
 				run()
 			}
