@@ -40,7 +40,7 @@ func NewStatus(router *Router) *Status {
 		UnicastRoutes:      makeUnicastRouteStatusSlice(router.Routes),
 		BroadcastRoutes:    makeBroadcastRouteStatusSlice(router.Routes),
 		Connections:        makeLocalConnectionStatusSlice(router.ConnectionMaker),
-		Targets:            makeTargetSlice(router.ConnectionMaker),
+		Targets:            router.ConnectionMaker.Targets(),
 		OverlayDiagnostics: router.Overlay.Diagnostics(),
 		TrustedSubnets:     makeTrustedSubnetsSlice(router.TrustedSubnets),
 	}
@@ -197,20 +197,6 @@ func makeLocalConnectionStatusSlice(cm *connectionMaker) []LocalConnectionStatus
 				}
 			case targetConnected:
 			}
-		}
-		resultChan <- slice
-		return false
-	}
-	return <-resultChan
-}
-
-// makeTargetSlice takes a snapshot of the active targets (direct peers) in the ConnectionMaker.
-func makeTargetSlice(cm *connectionMaker) []string {
-	resultChan := make(chan []string, 0)
-	cm.actionChan <- func() bool {
-		var slice []string
-		for peer := range cm.directPeers {
-			slice = append(slice, peer)
 		}
 		resultChan <- slice
 		return false
