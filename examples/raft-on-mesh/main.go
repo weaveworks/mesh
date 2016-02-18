@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
@@ -46,6 +47,7 @@ func main() {
 		logger.Fatalf("%s: %v", *hwaddr, err)
 	}
 
+	// Create, but do not start, a router.
 	router := mesh.NewRouter(mesh.Config{
 		Host:               host,
 		Port:               port,
@@ -56,26 +58,16 @@ func main() {
 		TrustedSubnets:     []*net.IPNet{},
 	}, name, *nickname, mesh.NullOverlay{})
 
+	// Create a meshconn.Peer.
 	peer := meshconn.NewPeer(name, logger)
 	defer func() {
 		logger.Printf("peer closing")
 		peer.Close()
 	}()
-	go func() {
-		buf := make([]byte, 8192)
-		for {
-			n, remote, err := peer.ReadFrom(buf)
-			if err != nil {
-				logger.Printf("received %v, aborting receive loop", err)
-				return
-			}
-			logger.Printf("received %d from %s: %q", n, remote, string(buf[:n]))
-		}
-	}()
-
 	gossip := router.NewGossip(*channel, peer)
 	peer.Register(gossip)
 
+	// Start the router and join the mesh.
 	func() {
 		logger.Printf("mesh router starting (%s)", *meshListen)
 		router.Start()
@@ -87,6 +79,32 @@ func main() {
 
 	router.ConnectionMaker.InitiateConnections(peers.slice(), true)
 
+	// Wait until we have at least 3 peers.
+	var (
+		self   = meshconn.MeshAddr{PeerName: name}
+		others = []net.Addr{}
+	)
+	for {
+		others = others[:0]
+		for _, desc := range router.Peers.Descriptions() {
+			others = append(others, meshconn.MeshAddr{PeerName: desc.Name})
+		}
+		if len(others) >= 3 {
+			logger.Printf("got %d peers!", len(others))
+			break
+		}
+		logger.Printf("have %d peer(s), waiting...", len(others))
+		time.Sleep(time.Second)
+	}
+
+	// Boot up a Raft node.
+	logger.Printf("etcd controller starting")
+	controller := newController(peer, self, others, logger)
+	defer func() {
+		logger.Printf("etcd controller stopping")
+		controller.stop()
+	}()
+
 	errs := make(chan error, 2)
 
 	go func() {
@@ -97,7 +115,7 @@ func main() {
 
 	go func() {
 		logger.Printf("HTTP server starting (%s)", *httpListen)
-		http.HandleFunc("/", handle(logger, router, peer))
+		http.HandleFunc("/", handle(logger, router, peer, controller))
 		errs <- http.ListenAndServe(*httpListen, nil)
 	}()
 

@@ -9,7 +9,7 @@ import (
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
 
-func handle(logger *log.Logger, router *mesh.Router, peer *meshconn.Peer) http.HandlerFunc {
+func handle(logger *log.Logger, router *mesh.Router, peer *meshconn.Peer, c *controller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
