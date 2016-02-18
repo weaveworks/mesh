@@ -72,7 +72,7 @@ func (p *peer) set(key string, value int) (result int) {
 	c := make(chan struct{})
 	p.actions <- func() {
 		defer close(c)
-		st := newState().completeMerge(map[string]int{key: value})
+		st := newState().mergeComplete(map[string]int{key: value})
 		data := p.st.Merge(st)
 		if p.send != nil {
 			p.send.GossipBroadcast(st)
@@ -104,7 +104,7 @@ func (p *peer) OnGossip(buf []byte) (delta mesh.GossipData, err error) {
 		return nil, err
 	}
 
-	delta = p.st.deltaMerge(set)
+	delta = p.st.mergeDelta(set)
 	if delta == nil {
 		p.logger.Printf("OnGossip %v => delta %v", set, delta)
 	} else {
@@ -114,16 +114,20 @@ func (p *peer) OnGossip(buf []byte) (delta mesh.GossipData, err error) {
 }
 
 // Merge the gossiped data represented by buf into our state.
-// Return our complete resulting state.
-func (p *peer) OnGossipBroadcast(src mesh.PeerName, buf []byte) (complete mesh.GossipData, err error) {
+// Return the state information that was modified.
+func (p *peer) OnGossipBroadcast(src mesh.PeerName, buf []byte) (received mesh.GossipData, err error) {
 	var set map[string]int
 	if err := json.Unmarshal(buf, &set); err != nil {
 		return nil, err
 	}
 
-	complete = p.st.completeMerge(set)
-	p.logger.Printf("OnGossipBroadcast %s %v => complete %v", src, set, complete.(*state).set)
-	return complete, nil
+	received = p.st.mergeReceived(set)
+	if received == nil {
+		p.logger.Printf("OnGossipBroadcast %s %v => delta %v", src, set, received)
+	} else {
+		p.logger.Printf("OnGossipBroadcast %s %v => delta %v", src, set, received.(*state).set)
+	}
+	return received, nil
 }
 
 // Merge the gossiped data represented by buf into our state.
@@ -133,7 +137,7 @@ func (p *peer) OnGossipUnicast(src mesh.PeerName, buf []byte) error {
 		return err
 	}
 
-	complete := p.st.completeMerge(set)
+	complete := p.st.mergeComplete(set)
 	p.logger.Printf("OnGossipUnicast %s %v => complete %v", src, set, complete)
 	return nil
 }

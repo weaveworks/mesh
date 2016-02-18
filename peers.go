@@ -66,6 +66,22 @@ func newPeers(ourself *localPeer) *Peers {
 	return peers
 }
 
+// Descriptions returns descriptions for all known peers.
+func (peers *Peers) Descriptions() []PeerDescription {
+	peers.RLock()
+	defer peers.RUnlock()
+	descriptions := make([]PeerDescription, 0, len(peers.byName))
+	for _, peer := range peers.byName {
+		descriptions = append(descriptions, PeerDescription{
+			Name:           peer.Name,
+			NickName:       peer.peerSummary.NickName,
+			Self:           peer.Name == peers.ourself.Name,
+			NumConnections: len(peer.connections),
+		})
+	}
+	return descriptions
+}
+
 // OnGC adds a new function to be set of functions that will be executed on
 // all subsequent GC runs, receiving the GC'd peer.
 func (peers *Peers) OnGC(callback func(*Peer)) {

@@ -40,7 +40,7 @@ func (st *state) Encode() [][]byte {
 // Merge merges the other GossipData into this one,
 // and returns our resulting, complete state.
 func (st *state) Merge(other mesh.GossipData) (complete mesh.GossipData) {
-	return st.completeMerge(other.(*state).copy().set)
+	return st.mergeComplete(other.(*state).copy().set)
 }
 
 func (st *state) copy() *state {
@@ -52,14 +52,33 @@ func (st *state) copy() *state {
 }
 
 // Merge the set into our state, abiding increment-only semantics.
-// Return any key/values that have been mutated, or nil if nothing changed.
-func (st *state) deltaMerge(set map[string]int) (delta mesh.GossipData) {
+// Return a non-nil mesh.GossipData representation of the received set.
+func (st *state) mergeReceived(set map[string]int) (received mesh.GossipData) {
 	st.mtx.Lock()
 	defer st.mtx.Unlock()
 
 	for k, v := range set {
 		if v <= st.set[k] {
-			delete(set, k)
+			delete(set, k) // optimization: make the forwarded data smaller
+			continue
+		}
+		st.set[k] = v
+	}
+
+	return &state{
+		set: set, // all remaining elements were novel to us
+	}
+}
+
+// Merge the set into our state, abiding increment-only semantics.
+// Return any key/values that have been mutated, or nil if nothing changed.
+func (st *state) mergeDelta(set map[string]int) (delta mesh.GossipData) {
+	st.mtx.Lock()
+	defer st.mtx.Unlock()
+
+	for k, v := range set {
+		if v <= st.set[k] {
+			delete(set, k) // requirement: it's not part of a delta
 			continue
 		}
 		st.set[k] = v
@@ -75,7 +94,7 @@ func (st *state) deltaMerge(set map[string]int) (delta mesh.GossipData) {
 
 // Merge the set into our state, abiding increment-only semantics.
 // Return our resulting, complete state.
-func (st *state) completeMerge(set map[string]int) (complete mesh.GossipData) {
+func (st *state) mergeComplete(set map[string]int) (complete mesh.GossipData) {
 	st.mtx.Lock()
 	defer st.mtx.Unlock()
 

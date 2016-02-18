@@ -33,7 +33,7 @@ func TestPeerOnGossip(t *testing.T) {
 		},
 	} {
 		p := newPeer(log.New(ioutil.Discard, "", 0))
-		p.st.completeMerge(testcase.initial)
+		p.st.mergeComplete(testcase.initial)
 		buf, _ := json.Marshal(testcase.msg)
 		delta, err := p.OnGossip(buf)
 		if err != nil {
@@ -66,16 +66,16 @@ func TestPeerOnGossipBroadcast(t *testing.T) {
 		{
 			map[string]int{"a": 1},
 			map[string]int{"a": 0, "b": 2},
-			map[string]int{"a": 1, "b": 2},
+			map[string]int{"b": 2},
 		},
 		{
 			map[string]int{"a": 9},
 			map[string]int{"a": 8},
-			map[string]int{"a": 9},
+			map[string]int{}, // OnGossipBroadcast returns received, which should never be nil
 		},
 	} {
 		p := newPeer(log.New(ioutil.Discard, "", 0))
-		p.st.completeMerge(testcase.initial)
+		p.st.mergeComplete(testcase.initial)
 		buf, _ := json.Marshal(testcase.msg)
 		delta, err := p.OnGossipBroadcast(mesh.UnknownPeerName, buf)
 		if err != nil {
@@ -111,7 +111,7 @@ func TestPeerOnGossipUnicast(t *testing.T) {
 		},
 	} {
 		p := newPeer(log.New(ioutil.Discard, "", 0))
-		p.st.completeMerge(testcase.initial)
+		p.st.mergeComplete(testcase.initial)
 		buf, _ := json.Marshal(testcase.msg)
 		if err := p.OnGossipUnicast(mesh.UnknownPeerName, buf); err != nil {
 			t.Errorf("%v OnGossipBroadcast %v: %v", testcase.initial, testcase.msg, err)
