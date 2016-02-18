@@ -3,41 +3,49 @@ package mesh
 import "sync"
 
 // Gossip is the sending interface.
+//
 // TODO(pb): rename to e.g. Sender
 type Gossip interface {
 	// GossipUnicast emits a single message to a peer in the mesh.
+	//
 	// TODO(pb): rename to Unicast?
 	//
 	// Unicast takes []byte instead of GossipData because "to date there has
 	// been no compelling reason [in practice] to do merging on unicast."
 	// But there may be some motivation to have unicast Mergeable; see
 	// https://github.com/weaveworks/weave/issues/1764
+	//
 	// TODO(pb): for uniformity of interface, rather take GossipData?
 	GossipUnicast(dst PeerName, msg []byte) error
 
 	// GossipBroadcast emits a message to all peers in the mesh.
+	//
 	// TODO(pb): rename to Broadcast?
 	GossipBroadcast(update GossipData)
 }
 
 // Gossiper is the receiving interface.
+//
 // TODO(pb): rename to e.g. Receiver
 type Gossiper interface {
 	// OnGossipUnicast merges received data into state.
+	//
 	// TODO(pb): rename to e.g. OnUnicast
 	OnGossipUnicast(src PeerName, msg []byte) error
 
 	// OnGossipBroadcast merges received data into state and returns a
-	// representation of the received data, for further propagation.
+	// representation of the received data (typically a delta) for further
+	// propagation.
+	//
 	// TODO(pb): rename to e.g. OnBroadcast
-	OnGossipBroadcast(src PeerName, update []byte) (GossipData, error)
+	OnGossipBroadcast(src PeerName, update []byte) (received GossipData, err error)
 
 	// Gossip returns the state of everything we know; gets called periodically.
-	Gossip() GossipData
+	Gossip() (complete GossipData)
 
 	// OnGossip merges received data into state and returns "everything new
 	// I've just learnt", or nil if nothing in the received data was new.
-	OnGossip(msg []byte) (GossipData, error)
+	OnGossip(msg []byte) (delta GossipData, err error)
 }
 
 // GossipData is a merge-able dataset.
@@ -47,6 +55,7 @@ type GossipData interface {
 	Encode() [][]byte
 
 	// Merge combines another GossipData into this one and returns the result.
+	//
 	// TODO(pb): does it need to be leave the original unmodified?
 	Merge(GossipData) GossipData
 }

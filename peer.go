@@ -27,6 +27,14 @@ type peerSummary struct {
 	HasShortID bool
 }
 
+// PeerDescription collects information about peers that is useful to clients.
+type PeerDescription struct {
+	Name           PeerName
+	NickName       string
+	Self           bool
+	NumConnections int
+}
+
 type connectionSet map[Connection]struct{}
 
 func newPeerFromSummary(summary peerSummary) *Peer {

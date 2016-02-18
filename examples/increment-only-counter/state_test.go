@@ -45,7 +45,7 @@ func TestStateConvergence(t *testing.T) {
 		var debug bytes.Buffer
 
 		merge := func(index int) {
-			st.Merge(newState().completeMerge(ops[index]))
+			st.Merge(newState().mergeComplete(ops[index]))
 			fmt.Fprintf(&debug, "Merge %v\n", ops[index])
 		}
 
@@ -67,7 +67,7 @@ func TestStateConvergence(t *testing.T) {
 	}
 }
 
-func TestStateCompleteMerge(t *testing.T) {
+func TestStateMergeReceived(t *testing.T) {
 	for _, testcase := range []struct {
 		initial map[string]int
 		merge   map[string]int
@@ -81,27 +81,28 @@ func TestStateCompleteMerge(t *testing.T) {
 		{
 			map[string]int{"a": 1, "b": 2},
 			map[string]int{"a": 1, "b": 2},
-			map[string]int{"a": 1, "b": 2},
+			map[string]int{},
 		},
 		{
 			map[string]int{"a": 1, "b": 2},
 			map[string]int{"c": 3},
-			map[string]int{"a": 1, "b": 2, "c": 3},
+			map[string]int{"c": 3},
 		},
 		{
+			map[string]int{"b": 3},
 			map[string]int{"a": 1, "b": 2},
-			map[string]int{"a": 0, "b": 3},
-			map[string]int{"a": 1, "b": 3},
+			map[string]int{"a": 1}, // we drop keys that don't semantically merge
 		},
 	} {
-		st := newState().completeMerge(testcase.initial).(*state).completeMerge(testcase.merge).(*state)
-		if want, have := testcase.want, st.set; !reflect.DeepEqual(want, have) {
-			t.Errorf("%v completeMerge %v: want %v, have %v", testcase.initial, testcase.merge, want, have)
+		initial, merge := testcase.initial, testcase.merge // mergeReceived modifies arguments
+		delta := newState().mergeComplete(initial).(*state).mergeReceived(merge)
+		if want, have := testcase.want, delta.(*state).set; !reflect.DeepEqual(want, have) {
+			t.Errorf("%v mergeReceived %v: want %v, have %v", testcase.initial, testcase.merge, want, have)
 		}
 	}
 }
 
-func TestStateDeltaMerge(t *testing.T) {
+func TestStateMergeDelta(t *testing.T) {
 	for _, testcase := range []struct {
 		initial map[string]int
 		merge   map[string]int
@@ -128,15 +129,50 @@ func TestStateDeltaMerge(t *testing.T) {
 			map[string]int{"b": 3},
 		},
 	} {
-		delta := newState().completeMerge(testcase.initial).(*state).deltaMerge(testcase.merge)
+		initial, merge := testcase.initial, testcase.merge // mergeDelta modifies arguments
+		delta := newState().mergeComplete(initial).(*state).mergeDelta(merge)
 		if want := testcase.want; want == nil {
 			if delta != nil {
-				t.Errorf("%v deltaMerge %v: want nil, have non-nil", testcase.initial, testcase.merge)
+				t.Errorf("%v mergeDelta %v: want nil, have non-nil", testcase.initial, testcase.merge)
 			}
 		} else {
 			if have := delta.(*state).set; !reflect.DeepEqual(want, have) {
-				t.Errorf("%v deltaMerge %v: want %v, have %v", testcase.initial, testcase.merge, want, have)
+				t.Errorf("%v mergeDelta %v: want %v, have %v", testcase.initial, testcase.merge, want, have)
 			}
+		}
+	}
+}
+
+func TestStateMergeComplete(t *testing.T) {
+	for _, testcase := range []struct {
+		initial map[string]int
+		merge   map[string]int
+		want    map[string]int
+	}{
+		{
+			map[string]int{},
+			map[string]int{"a": 1, "b": 2},
+			map[string]int{"a": 1, "b": 2},
+		},
+		{
+			map[string]int{"a": 1, "b": 2},
+			map[string]int{"a": 1, "b": 2},
+			map[string]int{"a": 1, "b": 2},
+		},
+		{
+			map[string]int{"a": 1, "b": 2},
+			map[string]int{"c": 3},
+			map[string]int{"a": 1, "b": 2, "c": 3},
+		},
+		{
+			map[string]int{"a": 1, "b": 2},
+			map[string]int{"a": 0, "b": 3},
+			map[string]int{"a": 1, "b": 3},
+		},
+	} {
+		st := newState().mergeComplete(testcase.initial).(*state).mergeComplete(testcase.merge).(*state)
+		if want, have := testcase.want, st.set; !reflect.DeepEqual(want, have) {
+			t.Errorf("%v mergeComplete %v: want %v, have %v", testcase.initial, testcase.merge, want, have)
 		}
 	}
 }
