@@ -16,6 +16,21 @@ import (
 // stepper, and takes messages via the send method. Similarly the controller
 // owns the packetTransport, delivers state changes to the state machine, and
 // takes proposals via some future propose method.
+//
+// Architecture diagram:
+//
+// +----------+  +-----------------+   +----------------------+   +-----------------------+
+// | meshconn |  | packetTransport |   | controller           |   | stateMachine          |
+// |          |  |                 |   |                      |   |                       |
+// |  ReadFrom|--|-->[stepper]-----|-->|step---.              |   |                       |
+// |          |  |                 |   |       |              |   |                       |
+// |          |  |                 |   |       v              |   |               +-----+ |
+// |   WriteTo|<-|-------------send|<--|--[raft.Node]-->[sm]--|-->|apply--------->|     |---> GET /key
+// |          |  |                 |   |       ^              |   |               |     |---> WATCH /key
+// |          |  |                 |   |       |              |   |               |     | |
+// |          |  |                 |   |       '-------propose|<--|--[proposer]<--|     |<--- POST /key
+// |          |  |                 |   |                      |   |               +-----+ |
+// +----------+  +-----------------+   +----------------------+   +-----------------------+
 
 // controller is an etcd-flavoured Raft controller.
 // It takes ownership of a net.PacketConn, used as a transport.
