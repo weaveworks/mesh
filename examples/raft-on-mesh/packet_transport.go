@@ -12,6 +12,7 @@ import (
 )
 
 // packetTransport takes ownership of the net.PacketConn.
+// It must be started with a stepper, to receive messages.
 // Incoming messages are unmarshaled and forwarded to the stepper.
 // Outgoing messages are marshaled and sent via the net.PacketConn.
 type packetTransport struct {
@@ -24,26 +25,23 @@ type stepper interface {
 	Step(wackycontext.Context, raftpb.Message) error
 }
 
-type msgSender interface {
-	send(msg raftpb.Message) error
-	stop()
-}
-
-func newPacketTransport(conn net.PacketConn, recv stepper, logger *log.Logger) msgSender {
-	t := &packetTransport{
-		conn:     conn,
-		incoming: recv,
-		logger:   logger,
+func newPacketTransport(conn net.PacketConn, logger *log.Logger) *packetTransport {
+	return &packetTransport{
+		conn:   conn,
+		logger: logger,
 	}
-	go t.recv()
-	return t
 }
 
-func (t packetTransport) stop() {
+func (t *packetTransport) start(s stepper) {
+	t.incoming = s
+	go t.recv()
+}
+
+func (t *packetTransport) stop() {
 	t.conn.Close()
 }
 
-func (t packetTransport) recv() {
+func (t *packetTransport) recv() {
 	defer t.conn.Close()
 	const maxRecvLen = 8192
 	b := make([]byte, maxRecvLen)

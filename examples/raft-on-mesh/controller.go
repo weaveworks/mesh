@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/weaveworks/mesh"
@@ -19,18 +20,18 @@ import (
 //
 // Architecture diagram:
 //
-// +----------+  +-----------------+   +----------------------+   +-----------------------+
-// | meshconn |  | packetTransport |   | controller           |   | stateMachine          |
-// |          |  |                 |   |                      |   |                       |
-// |  ReadFrom|--|-->[stepper]-----|-->|step---.              |   |                       |
-// |          |  |                 |   |       |              |   |                       |
-// |          |  |                 |   |       v              |   |               +-----+ |
-// |   WriteTo|<-|-------------send|<--|--[raft.Node]-->[sm]--|-->|apply--------->|     |---> GET /key
-// |          |  |                 |   |       ^              |   |               |     |---> WATCH /key
-// |          |  |                 |   |       |              |   |               |     | |
-// |          |  |                 |   |       '-------propose|<--|--[proposer]<--|     |<--- POST /key
-// |          |  |                 |   |                      |   |               +-----+ |
-// +----------+  +-----------------+   +----------------------+   +-----------------------+
+// +----------+   +-----------------+   +-------------------------+   +------------------+
+// | meshconn |   | packetTransport |   | controler               |   | stateMachine     |
+// |          |   |                 |   |                         |   |           +----+ |
+// |  ReadFrom@------------->stepper|-->@step-----.   .--->applyer|-->@apply----->|    | |
+// |          |   |                 |   |         |   |           |   |           |    | |
+// |          |   |                 |   |         v   |           |   |           |    |---> GET /key
+// |          |   |                 |   |      [raft.Node]        |   |           |    |---> WATCH /key
+// |          |   |                 |   |         |   ^           |   |           |    |<--- POST /key
+// |          |   |                 |   |         |   |           |   |           |    | |
+// |   WriteTo@<----------------send@<--|sender<--'   '----propose@<--|proposer<--|    | |
+// |          |   |                 |   |                         |   |           +----+ |
+// +----------+   +-----------------+   +-------------------------+   +------------------+
 
 // controller is an etcd-flavoured Raft controller.
 // It takes ownership of a net.PacketConn, used as a transport.
@@ -38,19 +39,35 @@ import (
 // (It doesn't persist to disk, by design: on death, all state is lost.)
 // It forwards messages to the stateMachine, which should implement something useful.
 type controller struct {
-	sender  msgSender // the only part of the transport that we care about
+	sender  sender // the only part of the transport that we care about
 	self    raft.Peer
 	others  []raft.Peer
 	storage *raft.MemoryStorage
 	node    raft.Node
-	sm      stateMachine
+	applyer applyer // the only part of the state machine we care about
 	logger  *log.Logger
 	quit    chan struct{}
 }
 
+// sender is the downstream behavior required by the raft.Node.
+// sender includes stop, because (as an implementation detail)
+// the controller takes ownership of the sender. This could be changed.
+// sender should be implemented by the transport.
+type sender interface {
+	send(msg raftpb.Message) error
+	stop()
+}
+
+// applyer is the upstream behavior required by the raft.Node.
+// applyer should be implemented by whatever provides the biz logic and API.
+type applyer interface {
+	applySnapshot(raftpb.Snapshot) error
+	applyCommittedEntry(raftpb.Entry) error
+}
+
 const heartbeatTick = 250 // ms
 
-func newController(conn net.PacketConn, self net.Addr, others []net.Addr, logger *log.Logger) *controller {
+func newController(s sender, self net.Addr, others []net.Addr, a applyer, logger *log.Logger) *controller {
 	storage := raft.NewMemoryStorage()
 	nodeConfig := &raft.Config{
 		ID:              makeRaftPeer(self).ID,
@@ -65,17 +82,21 @@ func newController(conn net.PacketConn, self net.Addr, others []net.Addr, logger
 	}
 	node := raft.StartNode(nodeConfig, makeRaftPeers(others))
 	c := &controller{
-		sender:  newPacketTransport(conn, node, logger),
+		sender:  s,
 		self:    makeRaftPeer(self),
 		others:  makeRaftPeers(others),
 		storage: storage,
 		node:    node,
-		sm:      surrogateStateMachine{}, // TODO(pb): real state machine!
+		applyer: a,
 		logger:  logger,
 		quit:    make(chan struct{}),
 	}
 	go c.driveRaft()
 	return c
+}
+
+func (c *controller) Step(ctx wackycontext.Context, msg raftpb.Message) error {
+	return c.node.Step(ctx, msg) // TODO(pb): is this safe to do concurrently?
 }
 
 func (c *controller) driveRaft() {
@@ -182,11 +203,11 @@ func (c *controller) readySend(msgs []raftpb.Message) {
 }
 
 func (c *controller) readyApply(snapshot raftpb.Snapshot, committedEntries []raftpb.Entry) error {
-	if err := c.sm.applySnapshot(snapshot); err != nil {
+	if err := c.applyer.applySnapshot(snapshot); err != nil {
 		return err
 	}
 	for _, committedEntry := range committedEntries {
-		if err := c.sm.applyCommittedEntry(committedEntry); err != nil {
+		if err := c.applyer.applyCommittedEntry(committedEntry); err != nil {
 			return err
 		}
 		if committedEntry.Type == raftpb.EntryConfChange {
@@ -206,25 +227,6 @@ func (c *controller) readyApply(snapshot raftpb.Snapshot, committedEntries []raf
 
 func (c *controller) readyAdvance() {
 	c.node.Advance()
-}
-
-// stateMachine is the behavior required by the raft.Node.
-// It should be implemented by whatever provides the biz logic and API.
-type stateMachine interface {
-	applySnapshot(raftpb.Snapshot) error
-	applyCommittedEntry(raftpb.Entry) error
-}
-
-type surrogateStateMachine struct{}
-
-var _ stateMachine = surrogateStateMachine{}
-
-func (surrogateStateMachine) applySnapshot(raftpb.Snapshot) error {
-	return errors.New("surrogate state machine")
-}
-
-func (surrogateStateMachine) applyCommittedEntry(raftpb.Entry) error {
-	return errors.New("surrogate state machine")
 }
 
 // makeRaftPeer converts a net.Addr into a raft.Peer with no context.

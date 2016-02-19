@@ -80,6 +80,7 @@ func main() {
 	router.ConnectionMaker.InitiateConnections(peers.slice(), true)
 
 	// Wait until we have at least 3 peers.
+	// TODO(pb): joining existing cluster will require plumbing changes
 	var (
 		self   = meshconn.MeshAddr{PeerName: name}
 		others = []net.Addr{}
@@ -90,20 +91,29 @@ func main() {
 			others = append(others, meshconn.MeshAddr{PeerName: desc.Name})
 		}
 		if len(others) >= 3 {
-			logger.Printf("got %d peers!", len(others))
+			logger.Printf("got %d peers", len(others))
 			break
 		}
 		logger.Printf("have %d peer(s), waiting...", len(others))
 		time.Sleep(time.Second)
 	}
 
-	// Boot up a Raft node.
+	// Create, but do not start, a transport.
+	transport := newPacketTransport(peer, logger)
+
+	// Create the state machine.
+	stateMachine := newStateMachine(logger)
+
+	// Boot up a controller to drive the Raft node.
 	logger.Printf("etcd controller starting")
-	controller := newController(peer, self, others, logger)
+	controller := newController(transport, self, others, stateMachine, logger)
 	defer func() {
 		logger.Printf("etcd controller stopping")
 		controller.stop()
 	}()
+
+	// Start the transport, passing the controller as the stepper.
+	transport.start(controller)
 
 	errs := make(chan error, 2)
 
@@ -115,7 +125,7 @@ func main() {
 
 	go func() {
 		logger.Printf("HTTP server starting (%s)", *httpListen)
-		http.HandleFunc("/", handle(logger, router, peer, controller))
+		http.HandleFunc("/", handle(logger, router, peer, stateMachine))
 		errs <- http.ListenAndServe(*httpListen, nil)
 	}()
 
