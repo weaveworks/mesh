@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -111,7 +112,7 @@ func (c *controller) driveRaft() {
 			c.node.Tick()
 		case r := <-c.node.Ready():
 			if err := c.handleReady(r); err != nil {
-				c.logger.Printf("controller: %v", err)
+				c.logger.Printf("controller: when handling ready message: %v", err)
 				return
 			}
 		case <-c.quit:
@@ -131,7 +132,7 @@ func (c *controller) handleReady(r raft.Ready) error {
 	// not empty. Note that when writing an Entry with Index i, any
 	// previously-persisted entries with Index >= i must be discarded.
 	if err := c.readySave(r.Snapshot, r.HardState, r.Entries); err != nil {
-		return err
+		return fmt.Errorf("save: %v", err)
 	}
 
 	// 2. Send all Messages to the nodes named in the To field. It is important
@@ -153,7 +154,7 @@ func (c *controller) handleReady(r raft.Ready) error {
 	// to cancel must be based solely on the state machine and not external
 	// information such as the observed health of the node).
 	if err := c.readyApply(r.Snapshot, r.CommittedEntries); err != nil {
-		return err
+		return fmt.Errorf("apply: %v", err)
 	}
 
 	// 4. Call Node.Advance() to signal readiness for the next batch of updates.
@@ -171,16 +172,16 @@ func (c *controller) readySave(snapshot raftpb.Snapshot, hardState raftpb.HardSt
 	// permits this.
 	if !raft.IsEmptySnap(snapshot) {
 		if err := c.storage.ApplySnapshot(snapshot); err != nil {
-			return err
+			return fmt.Errorf("apply snapshot: %v", err)
 		}
 	}
 	if !raft.IsEmptyHardState(hardState) {
 		if err := c.storage.SetHardState(hardState); err != nil {
-			return err
+			return fmt.Errorf("set hard state: %v", err)
 		}
 	}
 	if err := c.storage.Append(entries); err != nil {
-		return err
+		return fmt.Errorf("append: %v", err)
 	}
 	return nil
 }
@@ -204,17 +205,17 @@ func (c *controller) readySend(msgs []raftpb.Message) {
 
 func (c *controller) readyApply(snapshot raftpb.Snapshot, committedEntries []raftpb.Entry) error {
 	if err := c.applyer.applySnapshot(snapshot); err != nil {
-		return err
+		return fmt.Errorf("apply snapshot: %v", err)
 	}
 	for _, committedEntry := range committedEntries {
 		if err := c.applyer.applyCommittedEntry(committedEntry); err != nil {
-			return err
+			return fmt.Errorf("apply committed entry: %v", err)
 		}
 		if committedEntry.Type == raftpb.EntryConfChange {
 			// See raftexample raftNode.publishEntries
 			var cc raftpb.ConfChange
 			if err := cc.Unmarshal(committedEntry.Data); err != nil {
-				return err
+				return fmt.Errorf("unmarshal ConfChange: %v", err)
 			}
 			c.node.ApplyConfChange(cc)
 			if cc.Type == raftpb.ConfChangeRemoveNode && cc.NodeID == c.self.ID {
