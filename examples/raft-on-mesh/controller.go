@@ -40,15 +40,20 @@ import (
 // (It doesn't persist to disk, by design: on death, all state is lost.)
 // It forwards messages to the stateMachine, which should implement something useful.
 type controller struct {
-	sender  sender // the only part of the transport that we care about
-	self    raft.Peer
-	others  []raft.Peer
-	storage *raft.MemoryStorage
-	node    raft.Node
-	applyer applyer // the only part of the state machine we care about
-	logger  *log.Logger
-	quit    chan struct{}
+	sender    sender // the only part of the transport that we care about
+	self      raft.Peer
+	others    []raft.Peer
+	storage   *raft.MemoryStorage
+	node      raft.Node
+	proposalc chan []byte
+	confchgc  chan raftpb.ConfChange
+	applyer   applyer // the only part of the state machine we care about
+	logger    *log.Logger
+	quit      chan struct{}
 }
+
+var _ stepper = &controller{}
+var _ proposer = &controller{}
 
 // sender is the downstream behavior required by the raft.Node.
 // sender includes stop, because (as an implementation detail)
@@ -83,14 +88,16 @@ func newController(s sender, self net.Addr, others []net.Addr, a applyer, logger
 	}
 	node := raft.StartNode(nodeConfig, makeRaftPeers(others))
 	c := &controller{
-		sender:  s,
-		self:    makeRaftPeer(self),
-		others:  makeRaftPeers(others),
-		storage: storage,
-		node:    node,
-		applyer: a,
-		logger:  logger,
-		quit:    make(chan struct{}),
+		sender:    s,
+		self:      makeRaftPeer(self),
+		others:    makeRaftPeers(others),
+		storage:   storage,
+		node:      node,
+		confchgc:  make(chan raftpb.ConfChange),
+		proposalc: make(chan []byte),
+		applyer:   a,
+		logger:    logger,
+		quit:      make(chan struct{}),
 	}
 	go c.driveRaft()
 	return c
@@ -100,21 +107,45 @@ func (c *controller) Step(ctx wackycontext.Context, msg raftpb.Message) error {
 	return c.node.Step(ctx, msg) // TODO(pb): is this safe to do concurrently?
 }
 
+func (c *controller) propose(b []byte) {
+	c.proposalc <- b
+}
+
+func (c *controller) confChange(cc raftpb.ConfChange) {
+	c.confchgc <- cc
+}
+
 func (c *controller) driveRaft() {
 	// Now that we are holding on to a Node, we have a few responsibilities.
 	// See https://godoc.org/github.com/coreos/etcd/raft
-	ticker := time.NewTicker((heartbeatTick / 10) * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond) // TODO(pb): taken from raftexample; need to validate
 	defer ticker.Stop()
 	defer c.sender.stop()
 	for {
 		select {
 		case <-ticker.C:
 			c.node.Tick()
+
+		case cc := <-c.confchgc:
+			c.logger.Printf("controller: got ConfChange")
+			if err := c.node.ProposeConfChange(wackycontext.TODO(), cc); err != nil {
+				c.logger.Printf("controller: when handling ConfChange: %v", err)
+				return
+			}
+
+		case b := <-c.proposalc:
+			c.logger.Printf("controller: got proposal (%s)", string(b))
+			if err := c.node.Propose(wackycontext.TODO(), b); err != nil {
+				c.logger.Printf("controller: when handling proposal: %v", err)
+				return
+			}
+
 		case r := <-c.node.Ready():
 			if err := c.handleReady(r); err != nil {
 				c.logger.Printf("controller: when handling ready message: %v", err)
 				return
 			}
+
 		case <-c.quit:
 			return
 		}

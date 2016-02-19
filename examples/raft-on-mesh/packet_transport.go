@@ -25,6 +25,8 @@ type stepper interface {
 	Step(wackycontext.Context, raftpb.Message) error
 }
 
+// TODO(pb) type confChanger interface etc.
+
 func newPacketTransport(conn net.PacketConn, logger *log.Logger) *packetTransport {
 	return &packetTransport{
 		conn:   conn,
@@ -48,15 +50,15 @@ func (t *packetTransport) recv() {
 	for {
 		n, remote, err := t.conn.ReadFrom(b)
 		if err != nil {
-			t.logger.Printf("packet transport: recv: %s: %v (aborting)", remote, err)
+			t.logger.Printf("packet transport: recv from %s: %v (aborting)", remote, err)
 			return
 		} else if n >= cap(b) {
-			t.logger.Printf("packet transport: recv: %s: short read (%d) (continuing)", remote, n)
+			t.logger.Printf("packet transport: recv from %s: short read (%d) (continuing)", remote, n)
 			continue
 		}
 		var msg raftpb.Message
 		if err := msg.Unmarshal(b); err != nil {
-			t.logger.Printf("packet transport: recv: %s: %v (continuing)", remote, err)
+			t.logger.Printf("packet transport: recv from %s: %v (continuing)", remote, err)
 			continue
 		}
 		t.incoming.Step(wackycontext.TODO(), msg)

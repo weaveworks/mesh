@@ -83,12 +83,36 @@ func handlePostRaw(peer *meshconn.Peer, logger *log.Logger) http.HandlerFunc {
 
 func handleGetKey(s store, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "get key not implemented\n")
+		key := r.URL.Path[1:]
+		if key == "" {
+			http.Error(w, "no key specified", http.StatusBadRequest)
+			return
+		}
+		value, err := s.get(key)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		fmt.Fprintf(w, "%q = %q\n", key, value)
 	}
 }
 
 func handlePostKey(s store, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "post key not implemented\n")
+		key := r.URL.Path[1:]
+		if key == "" {
+			http.Error(w, "no key specified", http.StatusBadRequest)
+			return
+		}
+		value := r.FormValue("value")
+		if value == "" {
+			http.Error(w, "no value specified", http.StatusBadRequest)
+			return
+		}
+		if err := s.post(key, value); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "%q = %q proposed\n", key, value)
 	}
 }

@@ -101,7 +101,7 @@ func main() {
 	// Create, but do not start, a transport.
 	transport := newPacketTransport(peer, logger)
 
-	// Create the state machine.
+	// Create the state machine. Note it's not usable until a proposer is set.
 	stateMachine := newStateMachine(logger)
 
 	// Boot up a controller to drive the Raft node.
@@ -112,23 +112,23 @@ func main() {
 		controller.stop()
 	}()
 
+	// Pass the controller to the state machine as a proposer.
+	stateMachine.setProposer(controller)
+
 	// Start the transport, passing the controller as the stepper.
 	transport.start(controller)
 
 	errs := make(chan error, 2)
-
 	go func() {
 		c := make(chan os.Signal)
 		signal.Notify(c, syscall.SIGINT)
 		errs <- fmt.Errorf("%s", <-c)
 	}()
-
 	go func() {
 		logger.Printf("HTTP server starting (%s)", *httpListen)
 		http.HandleFunc("/", handle(logger, router, peer, stateMachine))
 		errs <- http.ListenAndServe(*httpListen, nil)
 	}()
-
 	logger.Print(<-errs)
 }
 

@@ -13,11 +13,16 @@ type stateMachine struct {
 	mtx      sync.RWMutex
 	data     map[string]string
 	watchers map[string]map[chan<- string]struct{}
+	proposer proposer
 	logger   *log.Logger
 }
 
 var _ applyer = &stateMachine{}
 var _ store = &stateMachine{}
+
+type proposer interface {
+	propose(b []byte)
+}
 
 func newStateMachine(logger *log.Logger) *stateMachine {
 	return &stateMachine{
@@ -27,9 +32,21 @@ func newStateMachine(logger *log.Logger) *stateMachine {
 	}
 }
 
+func (s *stateMachine) setProposer(p proposer) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.proposer = p
+}
+
 func (s *stateMachine) applySnapshot(snapshot raftpb.Snapshot) error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
+	if len(snapshot.Data) == 0 {
+		s.logger.Printf("state machine: apply snapshot with empty snapshot; skipping")
+		return nil
+	}
+	s.logger.Printf("state machine: applying snapshot: size %d", len(snapshot.Data))
+	s.logger.Printf("state machine: applying snapshot: metadata %s", snapshot.Metadata.String())
 	if err := json.Unmarshal(snapshot.Data, &s.data); err != nil {
 		return err
 	}
@@ -62,7 +79,13 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	for k, v := range single {
-		s.data[k] = v
+		s.data[k] = v // set
+
+		if m, ok := s.watchers[k]; ok {
+			for c := range m {
+				c <- v // notify (blocking)
+			}
+		}
 	}
 
 	return nil
@@ -124,13 +147,17 @@ func (s *stateMachine) unwatch(key string, c chan<- string) {
 }
 
 func (s *stateMachine) post(key, value string) error {
+	b, err := json.Marshal(map[string]string{key: value})
+	if err != nil {
+		return err
+	}
+
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	s.data[key] = value
-	if m, ok := s.watchers[key]; ok {
-		for c := range m {
-			c <- value // blocking update
-		}
+
+	if s.proposer == nil {
+		panic("state machine: post without proposer")
 	}
+	s.proposer.propose(b)
 	return nil
 }
