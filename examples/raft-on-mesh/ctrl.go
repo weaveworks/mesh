@@ -14,66 +14,44 @@ import (
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
 
-// The packetTransport owns the net.PacketConn, delivers messages to the
-// stepper, and takes messages via the send method. Similarly the controller
-// owns the packetTransport, delivers state changes to the state machine, and
-// takes proposals via some future propose method.
-//
-// Architecture diagram:
-//
-// +----------+   +-----------------+   +-------------------------+   +------------------+
-// | meshconn |   | packetTransport |   | controler               |   | stateMachine     |
-// |          |   |                 |   |                         |   |           +----+ |
-// |  ReadFrom@------------->stepper|-->@step-----.   .--->applyer|-->@apply----->|    | |
-// |          |   |                 |   |         |   |           |   |           |    | |
-// |          |   |                 |   |         v   |           |   |           |    |---> GET /key
-// |          |   |                 |   |      [raft.Node]        |   |           |    |---> WATCH /key
-// |          |   |                 |   |         |   ^           |   |           |    |<--- POST /key
-// |          |   |                 |   |         |   |           |   |           |    | |
-// |   WriteTo@<----------------send@<--|sender<--'   '----propose@<--|proposer<--|    | |
-// |          |   |                 |   |                         |   |           +----+ |
-// +----------+   +-----------------+   +-------------------------+   +------------------+
+//                                   +-ctrl----------------+
+// +-packetTransport-+               |                     |
+// |                 |               |   +-raft.Node---+   |
+// |  +-meshconn-+   |               |   |             |   |               +-stateMachine-+
+// |  |  ReadFrom|-->|---incomingc-->|-->|Step  Propose|<--|<--proposalc---|              |
+// |  |          |   |               |   |             |   |               |              |
+// |  |          |   |               |   +-------------+   |               |              |
+// |  |          |   |               |     |    |    |     |               |              |
+// |  |   WriteTo|<--|<--outgoingc---|<----'    |    '---->|---snapshotc-->|              |
+// |  +----------+   |               |          '--------->|---entryc----->|              |
+// +-----------------+               +---------------------+               +--------------+
 
-// controller is an etcd-flavoured Raft controller.
-// It takes ownership of a net.PacketConn, used as a transport.
-// It constructs and drives a raft.Peer, saving to a raft.MemoryStorage.
-// (It doesn't persist to disk, by design: on death, all state is lost.)
-// It forwards messages to the stateMachine, which should implement something useful.
-type controller struct {
-	sender    sender // the only part of the transport that we care about
+type ctrl struct {
 	self      raft.Peer
 	others    []raft.Peer
+	incomingc chan raftpb.Message  // from the transport
+	outgoingc chan raftpb.Message  // to the transport
+	snapshotc chan raftpb.Snapshot // to the state machine
+	entryc    chan raftpb.Entry    // to the state machine
+	proposalc chan []byte          // from the state machine
+	quitc     chan struct{}
 	storage   *raft.MemoryStorage
 	node      raft.Node
-	proposalc chan []byte
-	confchgc  chan raftpb.ConfChange
-	applyer   applyer // the only part of the state machine we care about
 	logger    *log.Logger
-	quit      chan struct{}
-}
-
-var _ stepper = &controller{}
-var _ proposer = &controller{}
-
-// sender is the downstream behavior required by the raft.Node.
-// sender includes stop, because (as an implementation detail)
-// the controller takes ownership of the sender. This could be changed.
-// sender should be implemented by the transport.
-type sender interface {
-	send(msg raftpb.Message) error
-	stop()
-}
-
-// applyer is the upstream behavior required by the raft.Node.
-// applyer should be implemented by whatever provides the biz logic and API.
-type applyer interface {
-	applySnapshot(raftpb.Snapshot) error
-	applyCommittedEntry(raftpb.Entry) error
 }
 
 const heartbeatTick = 250 // ms
 
-func newController(s sender, self net.Addr, others []net.Addr, a applyer, logger *log.Logger) *controller {
+func newCtrl(
+	self net.Addr,
+	others []net.Addr,
+	incomingc chan raftpb.Message,
+	outgoingc chan raftpb.Message,
+	snapshotc chan raftpb.Snapshot,
+	entryc chan raftpb.Entry,
+	proposalc chan []byte,
+	logger *log.Logger,
+) *ctrl {
 	storage := raft.NewMemoryStorage()
 	nodeConfig := &raft.Config{
 		ID:              makeRaftPeer(self).ID,
@@ -87,76 +65,52 @@ func newController(s sender, self net.Addr, others []net.Addr, a applyer, logger
 		Logger:          &raft.DefaultLogger{Logger: logger},
 	}
 	node := raft.StartNode(nodeConfig, makeRaftPeers(others))
-	c := &controller{
-		sender:    s,
+	c := &ctrl{
 		self:      makeRaftPeer(self),
 		others:    makeRaftPeers(others),
+		incomingc: incomingc,
+		outgoingc: outgoingc,
+		snapshotc: snapshotc,
+		entryc:    entryc,
+		proposalc: proposalc,
+		quitc:     make(chan struct{}),
 		storage:   storage,
 		node:      node,
-		confchgc:  make(chan raftpb.ConfChange),
-		proposalc: make(chan []byte),
-		applyer:   a,
 		logger:    logger,
-		quit:      make(chan struct{}),
 	}
 	go c.driveRaft()
 	return c
 }
 
-func (c *controller) Step(ctx wackycontext.Context, msg raftpb.Message) error {
-	return c.node.Step(ctx, msg) // TODO(pb): is this safe to do concurrently?
-}
+func (c *ctrl) stop() { close(c.quitc) }
 
-func (c *controller) propose(b []byte) {
-	c.proposalc <- b
-}
-
-func (c *controller) confChange(cc raftpb.ConfChange) {
-	c.confchgc <- cc
-}
-
-func (c *controller) driveRaft() {
-	// Now that we are holding on to a Node, we have a few responsibilities.
-	// See https://godoc.org/github.com/coreos/etcd/raft
+func (c *ctrl) driveRaft() {
 	ticker := time.NewTicker(100 * time.Millisecond) // TODO(pb): taken from raftexample; need to validate
 	defer ticker.Stop()
-	defer c.sender.stop()
 	for {
 		select {
 		case <-ticker.C:
 			c.node.Tick()
 
-		case cc := <-c.confchgc:
-			c.logger.Printf("controller: got ConfChange")
-			if err := c.node.ProposeConfChange(wackycontext.TODO(), cc); err != nil {
-				c.logger.Printf("controller: when handling ConfChange: %v", err)
-				return
-			}
+		case msg := <-c.incomingc:
+			c.node.Step(wackycontext.TODO(), msg)
 
-		case b := <-c.proposalc:
-			c.logger.Printf("controller: got proposal (%s)", string(b))
-			if err := c.node.Propose(wackycontext.TODO(), b); err != nil {
-				c.logger.Printf("controller: when handling proposal: %v", err)
-				return
-			}
+		case data := <-c.proposalc:
+			c.node.Propose(wackycontext.TODO(), data)
 
 		case r := <-c.node.Ready():
 			if err := c.handleReady(r); err != nil {
-				c.logger.Printf("controller: when handling ready message: %v", err)
+				c.logger.Printf("ctrl: handle ready: %v", err)
 				return
 			}
 
-		case <-c.quit:
+		case <-c.quitc:
 			return
 		}
 	}
 }
 
-func (c *controller) stop() {
-	close(c.quit)
-}
-
-func (c *controller) handleReady(r raft.Ready) error {
+func (c *ctrl) handleReady(r raft.Ready) error {
 	// These steps may be performed in parallel, except as noted in step 2.
 	//
 	// 1. Write HardState, Entries, and Snapshot to persistent storage if they are
@@ -196,7 +150,7 @@ func (c *controller) handleReady(r raft.Ready) error {
 	return nil
 }
 
-func (c *controller) readySave(snapshot raftpb.Snapshot, hardState raftpb.HardState, entries []raftpb.Entry) error {
+func (c *ctrl) readySave(snapshot raftpb.Snapshot, hardState raftpb.HardState, entries []raftpb.Entry) error {
 	// For the moment, none of these steps persist to disk. That violates some Raft
 	// invariants. But we are ephemeral, and will always boot empty, willingly
 	// paying the snapshot cost. I trust that that the etcd Raft implementation
@@ -217,31 +171,24 @@ func (c *controller) readySave(snapshot raftpb.Snapshot, hardState raftpb.HardSt
 	return nil
 }
 
-func (c *controller) readySend(msgs []raftpb.Message) {
+func (c *ctrl) readySend(msgs []raftpb.Message) {
 	for _, msg := range msgs {
-		err := c.sender.send(msg)
-		if err != nil {
-			c.logger.Printf("controller: send: %v", err) // this will happen sometimes
-		}
+		c.outgoingc <- msg
 
 		if msg.Type == raftpb.MsgSnap {
-			status := raft.SnapshotFinish
-			if err != nil {
-				status = raft.SnapshotFailure
-			}
-			c.node.ReportSnapshot(msg.To, status)
+			// Assume snapshot sends always succeed.
+			// TODO(pb): do we need error reporting?
+			c.node.ReportSnapshot(msg.To, raft.SnapshotFinish)
 		}
 	}
 }
 
-func (c *controller) readyApply(snapshot raftpb.Snapshot, committedEntries []raftpb.Entry) error {
-	if err := c.applyer.applySnapshot(snapshot); err != nil {
-		return fmt.Errorf("apply snapshot: %v", err)
-	}
+func (c *ctrl) readyApply(snapshot raftpb.Snapshot, committedEntries []raftpb.Entry) error {
+	c.snapshotc <- snapshot
+
 	for _, committedEntry := range committedEntries {
-		if err := c.applyer.applyCommittedEntry(committedEntry); err != nil {
-			return fmt.Errorf("apply committed entry: %v", err)
-		}
+		c.entryc <- committedEntry
+
 		if committedEntry.Type == raftpb.EntryConfChange {
 			// See raftexample raftNode.publishEntries
 			var cc raftpb.ConfChange
@@ -254,10 +201,11 @@ func (c *controller) readyApply(snapshot raftpb.Snapshot, committedEntries []raf
 			}
 		}
 	}
+
 	return nil
 }
 
-func (c *controller) readyAdvance() {
+func (c *ctrl) readyAdvance() {
 	c.node.Advance()
 }
 

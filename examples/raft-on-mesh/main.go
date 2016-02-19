@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
@@ -98,25 +99,22 @@ func main() {
 		time.Sleep(time.Second)
 	}
 
-	// Create, but do not start, a transport.
-	transport := newPacketTransport(peer, logger)
+	incomingc := make(chan raftpb.Message)  // from meshconn to controller
+	outgoingc := make(chan raftpb.Message)  // from controller to meshconn
+	snapshotc := make(chan raftpb.Snapshot) // from controller to state machine
+	entryc := make(chan raftpb.Entry)       // from controller to state machine
+	proposalc := make(chan []byte)          // from state machine to controller
 
-	// Create the state machine. Note it's not usable until a proposer is set.
-	stateMachine := newStateMachine(logger)
+	// Create a packet transport.
+	transport := newPacketTransport(peer, incomingc, outgoingc, logger)
+	defer transport.stop()
 
-	// Boot up a controller to drive the Raft node.
-	logger.Printf("etcd controller starting")
-	controller := newController(transport, self, others, stateMachine, logger)
-	defer func() {
-		logger.Printf("etcd controller stopping")
-		controller.stop()
-	}()
+	// Create the controller, which drives the Raft node internally.
+	controller := newCtrl(self, others, incomingc, outgoingc, snapshotc, entryc, proposalc, logger)
+	defer controller.stop()
 
-	// Pass the controller to the state machine as a proposer.
-	stateMachine.setProposer(controller)
-
-	// Start the transport, passing the controller as the stepper.
-	transport.start(controller)
+	// Create the state machine, which also serves our K/V API.
+	stateMachine := newStateMachine(snapshotc, entryc, proposalc, logger)
 
 	errs := make(chan error, 2)
 	go func() {

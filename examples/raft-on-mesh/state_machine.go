@@ -10,37 +10,60 @@ import (
 )
 
 type stateMachine struct {
-	mtx      sync.RWMutex
-	data     map[string]string
-	watchers map[string]map[chan<- string]struct{}
-	proposer proposer
-	logger   *log.Logger
+	mtx       sync.RWMutex
+	data      map[string]string
+	watchers  map[string]map[chan<- string]struct{}
+	snapshotc chan raftpb.Snapshot
+	entryc    chan raftpb.Entry
+	proposalc chan []byte
+	actionc   chan func()
+	quitc     chan struct{}
+	logger    *log.Logger
 }
 
-var _ applyer = &stateMachine{}
-var _ store = &stateMachine{}
-
-type proposer interface {
-	propose(b []byte)
+func newStateMachine(
+	snapshotc chan raftpb.Snapshot,
+	entryc chan raftpb.Entry,
+	proposalc chan []byte,
+	logger *log.Logger,
+) *stateMachine {
+	sm := &stateMachine{
+		data:      map[string]string{},
+		watchers:  map[string]map[chan<- string]struct{}{},
+		snapshotc: snapshotc,
+		entryc:    entryc,
+		proposalc: proposalc,
+		actionc:   make(chan func()),
+		quitc:     make(chan struct{}),
+		logger:    logger,
+	}
+	go sm.loop()
+	return sm
 }
 
-func newStateMachine(logger *log.Logger) *stateMachine {
-	return &stateMachine{
-		data:     map[string]string{},
-		watchers: map[string]map[chan<- string]struct{}{},
-		logger:   logger,
+func (s *stateMachine) loop() {
+	for {
+		select {
+		case snapshot := <-s.snapshotc:
+			if err := s.applySnapshot(snapshot); err != nil {
+				s.logger.Printf("state machine: apply snapshot: %v", err)
+			}
+
+		case entry := <-s.entryc:
+			if err := s.applyCommittedEntry(entry); err != nil {
+				s.logger.Printf("state machine: apply committed entry: %v", err)
+			}
+
+		case f := <-s.actionc:
+			f()
+
+		case <-s.quitc:
+			return
+		}
 	}
 }
 
-func (s *stateMachine) setProposer(p proposer) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	s.proposer = p
-}
-
 func (s *stateMachine) applySnapshot(snapshot raftpb.Snapshot) error {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	if len(snapshot.Data) == 0 {
 		s.logger.Printf("state machine: apply snapshot with empty snapshot; skipping")
 		return nil
@@ -76,8 +99,6 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	// TODO(pb): maybe early return?
 	// TODO(pb): do I need to validate the index somehow?
 
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	for k, v := range single {
 		s.data[k] = v // set
 
@@ -91,73 +112,60 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	return nil
 }
 
-func (s *stateMachine) get(key string) (string, error) {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-
-	v, ok := s.data[key]
-	if !ok {
-		return "", fmt.Errorf("%q not found", key)
-	}
-	return v, nil
-}
-
-func (s *stateMachine) watch(key string, results chan<- string) (cancel chan<- struct{}, err error) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	if _, ok := s.watchers[key]; !ok {
-		// This is the first watcher for this key.
-		s.watchers[key] = map[chan<- string]struct{}{}
-	}
-
-	s.watchers[key][results] = struct{}{} // register the update chan
-	c := make(chan struct{})
-
-	go func() {
-		<-c                     // when the user cancels the watch,
-		s.unwatch(key, results) // unwatch the key,
-		close(results)          // and close the results chan
-	}()
-
-	return c, nil
-}
-
-func (s *stateMachine) unwatch(key string, c chan<- string) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	if _, ok := s.watchers[key]; !ok {
-		s.logger.Printf("state machine: unwatch key %q had no watchers; strange", key)
-		return
-	}
-	if s.watchers[key] == nil {
-		s.logger.Printf("state machine: unwatch key %q revealed nil map; logic error", key)
-		return
-	}
-	if _, ok := s.watchers[key][c]; !ok {
-		s.logger.Printf("state machine: unwatch key %q with missing chan; strange", key)
-		return
-	}
-
-	delete(s.watchers[key], c)
-	if len(s.watchers[key]) == 0 {
-		delete(s.watchers, key)
-	}
-}
-
 func (s *stateMachine) post(key, value string) error {
-	b, err := json.Marshal(map[string]string{key: value})
+	buf, err := json.Marshal(map[string]string{key: value})
 	if err != nil {
 		return err
 	}
-
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	if s.proposer == nil {
-		panic("state machine: post without proposer")
-	}
-	s.proposer.propose(b)
+	s.proposalc <- buf
 	return nil
+}
+
+func (s *stateMachine) get(key string) (value string, err error) {
+	s.actionc <- func() {
+		if v, ok := s.data[key]; ok {
+			value = v
+		} else {
+			err = fmt.Errorf("%q not found", key)
+		}
+	}
+	return value, err
+}
+
+func (s *stateMachine) watch(key string, results chan<- string) (cancel chan<- struct{}, err error) {
+	s.actionc <- func() {
+		if _, ok := s.watchers[key]; !ok {
+			s.watchers[key] = map[chan<- string]struct{}{} // first watcher for this key
+		}
+		s.watchers[key][results] = struct{}{} // register the update chan
+		c := make(chan struct{})
+		go func() {
+			<-c                     // when the user cancels the watch,
+			s.unwatch(key, results) // unwatch the key,
+			close(results)          // and close the results chan
+		}()
+		cancel = c
+	}
+	return cancel, err
+}
+
+func (s *stateMachine) unwatch(key string, c chan<- string) {
+	s.actionc <- func() {
+		if _, ok := s.watchers[key]; !ok {
+			s.logger.Printf("state machine: unwatch key %q had no watchers; strange", key)
+			return
+		}
+		if s.watchers[key] == nil {
+			s.logger.Printf("state machine: unwatch key %q revealed nil map; logic error", key)
+			return
+		}
+		if _, ok := s.watchers[key][c]; !ok {
+			s.logger.Printf("state machine: unwatch key %q with missing chan; strange", key)
+			return
+		}
+		delete(s.watchers[key], c)
+		if len(s.watchers[key]) == 0 {
+			delete(s.watchers, key)
+		}
+	}
 }
