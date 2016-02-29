@@ -10,34 +10,39 @@ import (
 	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
+
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
 
-//                                   +-ctrl----------------+
-// +-packetTransport-+               |                     |
-// |                 |               |   +-raft.Node---+   |
-// |  +-meshconn-+   |               |   |             |   |               +-stateMachine-+
-// |  |  ReadFrom|-->|---incomingc-->|-->|Step  Propose|<--|<--proposalc---|              |
-// |  |          |   |               |   |             |   |               |              |
-// |  |          |   |               |   +-------------+   |               |              |
-// |  |          |   |               |     |    |    |     |               |              |
-// |  |   WriteTo|<--|<--outgoingc---|<----'    |    '---->|---snapshotc-->|              |
-// |  +----------+   |               |          '--------->|---entryc----->|              |
-// +-----------------+               +---------------------+               +--------------+
+//                                      +-ctrl----------------------+
+// +-packetTransport---+                |                           |
+// |                   |                |   +-raft.Node---------+   |
+// |  +-meshconn---+   |                |   |                   |   |               +-stateMachine-+
+// |  |    ReadFrom|-->|---incomingc--->|-->|Step        Propose|<--|<--proposalc---|              |
+// |  |            |   |                |   |                   |   |               |              |
+// |  |  .-mesh-.  |   |                |   |                   |   |               |              |
+// |  |  |      |-------->confchangec-->|-->|ProposeConfChange  |   |               |              |
+// |  |  '------'  |   |                |   |                   |   |               |              |
+// |  |            |   |                |   +-------------------+   |               |              |
+// |  |            |   |                |     |          |    |     |               |              |
+// |  |     WriteTo|<--|<--outgoingc----|<----'          |    '---->|---snapshotc-->|              |
+// |  +------------+   |                |                '--------->|---entryc----->|              |
+// +-------------------+                +---------------------------+               +--------------+
 
 type ctrl struct {
-	self      raft.Peer
-	others    []raft.Peer
-	incomingc chan raftpb.Message  // from the transport
-	outgoingc chan raftpb.Message  // to the transport
-	snapshotc chan raftpb.Snapshot // to the state machine
-	entryc    chan raftpb.Entry    // to the state machine
-	proposalc chan []byte          // from the state machine
-	quitc     chan struct{}
-	storage   *raft.MemoryStorage
-	node      raft.Node
-	logger    *log.Logger
+	self        raft.Peer
+	others      []raft.Peer
+	incomingc   <-chan raftpb.Message    // from the transport
+	outgoingc   chan<- raftpb.Message    // to the transport
+	confchangec <-chan raftpb.ConfChange // from the mesh
+	snapshotc   chan<- raftpb.Snapshot   // to the state machine
+	entryc      chan<- raftpb.Entry      // to the state machine
+	proposalc   <-chan []byte            // from the state machine
+	quitc       chan struct{}
+	storage     *raft.MemoryStorage
+	node        raft.Node
+	logger      *log.Logger
 }
 
 const heartbeatTick = 250 // ms
@@ -45,14 +50,17 @@ const heartbeatTick = 250 // ms
 func newCtrl(
 	self net.Addr,
 	others []net.Addr,
-	incomingc chan raftpb.Message,
-	outgoingc chan raftpb.Message,
-	snapshotc chan raftpb.Snapshot,
-	entryc chan raftpb.Entry,
-	proposalc chan []byte,
+	incomingc <-chan raftpb.Message,
+	outgoingc chan<- raftpb.Message,
+	confchangec <-chan raftpb.ConfChange,
+	snapshotc chan<- raftpb.Snapshot,
+	entryc chan<- raftpb.Entry,
+	proposalc <-chan []byte,
 	logger *log.Logger,
 ) *ctrl {
 	storage := raft.NewMemoryStorage()
+	raftLogger := &raft.DefaultLogger{Logger: logger}
+	raftLogger.EnableDebug()
 	nodeConfig := &raft.Config{
 		ID:              makeRaftPeer(self).ID,
 		ElectionTick:    10 * heartbeatTick,
@@ -62,47 +70,97 @@ func newCtrl(
 		MaxSizePerMsg:   4096, // TODO(pb): looks like bytes; confirm that
 		MaxInflightMsgs: 256,  // TODO(pb): copied from docs; confirm that
 		CheckQuorum:     true, // leader steps down if quorum is not active for an electionTimeout
-		Logger:          &raft.DefaultLogger{Logger: logger},
+		Logger:          raftLogger,
 	}
 	node := raft.StartNode(nodeConfig, makeRaftPeers(others))
 	c := &ctrl{
-		self:      makeRaftPeer(self),
-		others:    makeRaftPeers(others),
-		incomingc: incomingc,
-		outgoingc: outgoingc,
-		snapshotc: snapshotc,
-		entryc:    entryc,
-		proposalc: proposalc,
-		quitc:     make(chan struct{}),
-		storage:   storage,
-		node:      node,
-		logger:    logger,
+		self:        makeRaftPeer(self),
+		others:      makeRaftPeers(others),
+		incomingc:   incomingc,
+		outgoingc:   outgoingc,
+		confchangec: confchangec,
+		snapshotc:   snapshotc,
+		entryc:      entryc,
+		proposalc:   proposalc,
+		quitc:       make(chan struct{}),
+		storage:     storage,
+		node:        node,
+		logger:      logger,
 	}
-	go c.driveRaft()
+	go c.driveRaft()      // analagous to raftexample serveChannels
+	go c.driveProposals() // analagous to raftexample serveChannels anonymous goroutine
 	return c
 }
 
-func (c *ctrl) stop() { close(c.quitc) }
+func (c *ctrl) stop() {
+	close(c.quitc)
+}
 
 func (c *ctrl) driveRaft() {
+	defer c.logger.Printf("ctrl: driveRaft loop exit")
+
+	// Now that we are holding a raft.Node we have a few responsibilities.
+	// https://godoc.org/github.com/coreos/etcd/raft
+
 	ticker := time.NewTicker(100 * time.Millisecond) // TODO(pb): taken from raftexample; need to validate
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
 			c.node.Tick()
-
-		case msg := <-c.incomingc:
-			c.node.Step(wackycontext.TODO(), msg)
-
-		case data := <-c.proposalc:
-			c.node.Propose(wackycontext.TODO(), data)
 
 		case r := <-c.node.Ready():
 			if err := c.handleReady(r); err != nil {
 				c.logger.Printf("ctrl: handle ready: %v", err)
 				return
 			}
+
+		// Served from driveProposals
+		//case data := <-c.proposalc:
+		//	c.logger.Printf("ctrl: incoming proposal (%s)", data)
+		//	c.node.Propose(wackycontext.TODO(), data)
+		//	c.logger.Printf("ctrl: incoming proposal (%s) accepted", data)
+
+		case msg := <-c.incomingc:
+			c.logger.Printf("ctrl: incoming msg (%s)", msg.String())
+			c.node.Step(wackycontext.TODO(), msg)
+
+		// Served from driveProposals
+		//case cc := <-c.confchangec:
+		//	c.logger.Printf("ctrl: incoming confchange ID=%d type=%d nodeID=%d", cc.ID, cc.Type, cc.NodeID)
+		//	c.node.ProposeConfChange(wackycontext.TODO(), cc)
+
+		case <-c.quitc:
+			return
+		}
+	}
+}
+
+func (c *ctrl) driveProposals() {
+	defer c.logger.Printf("ctrl: driveProposals loop exit")
+
+	for c.proposalc != nil && c.confchangec != nil {
+		select {
+		case data, ok := <-c.proposalc:
+			if !ok {
+				c.logger.Printf("ctrl: got nil proposal; shutting down proposals")
+				c.proposalc = nil // TODO(pb): is this safe?
+				continue
+			}
+			c.logger.Printf("ctrl: incoming proposal (%s)", data)
+			c.node.Propose(wackycontext.TODO(), data)
+			c.logger.Printf("ctrl: incoming proposal (%s) accepted", data)
+
+		case cc, ok := <-c.confchangec:
+			if !ok {
+				c.logger.Printf("ctrl: got nil conf change; shutting down conf changes")
+				c.confchangec = nil // TODO(pb): is this safe?
+				continue
+			}
+			c.logger.Printf("ctrl: incoming confchange ID=%d type=%d nodeID=%d", cc.ID, cc.Type, cc.NodeID)
+			c.node.ProposeConfChange(wackycontext.TODO(), cc)
+			c.logger.Printf("ctrl: incoming confchange ID=%d type=%d nodeID=%d accepted", cc.ID, cc.Type, cc.NodeID)
 
 		case <-c.quitc:
 			return
@@ -217,7 +275,7 @@ func (c *ctrl) readyAdvance() {
 func makeRaftPeer(addr net.Addr) raft.Peer {
 	return raft.Peer{
 		ID:      uint64(addr.(meshconn.MeshAddr).PeerName),
-		Context: nil, // ?
+		Context: nil, // TODO(pb): ??
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/coreos/etcd/raft/raftpb"
+
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
@@ -57,7 +58,7 @@ func (t *packetTransport) recvLoop() {
 		}
 		var msg raftpb.Message
 		if err := msg.Unmarshal(b); err != nil {
-			t.logger.Printf("packet transport: recv from %s: %v (continuing)", remote, err)
+			t.logger.Printf("packet transport: recv from %s: %v (%s) (continuing)", remote, err, b)
 			continue
 		}
 		t.logger.Printf("packet transport: recv from %s: msg size %d", remote, msg.Size())

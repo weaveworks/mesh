@@ -90,6 +90,7 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 
 	var single map[string]string
 	if err := json.Unmarshal(entry.Data, &single); err != nil {
+		s.logger.Printf("state machine: unmarshaling entry.Data (%s): %v", entry.Data, err)
 		return err
 	}
 	if n := len(single); n != 1 {

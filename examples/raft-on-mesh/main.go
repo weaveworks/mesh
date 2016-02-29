@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coreos/etcd/raft/raftpb"
+
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
@@ -61,10 +62,10 @@ func main() {
 
 	// Create a meshconn.Peer.
 	peer := meshconn.NewPeer(name, logger)
-	defer func() {
-		logger.Printf("peer closing")
-		peer.Close()
-	}()
+	//defer func() {
+	//	logger.Printf("peer closing")
+	//	peer.Close()
+	//}()
 	gossip := router.NewGossip(*channel, peer)
 	peer.Register(gossip)
 
@@ -99,19 +100,23 @@ func main() {
 		time.Sleep(time.Second)
 	}
 
-	incomingc := make(chan raftpb.Message)  // from meshconn to controller
-	outgoingc := make(chan raftpb.Message)  // from controller to meshconn
-	snapshotc := make(chan raftpb.Snapshot) // from controller to state machine
-	entryc := make(chan raftpb.Entry)       // from controller to state machine
-	proposalc := make(chan []byte)          // from state machine to controller
+	incomingc := make(chan raftpb.Message)      // from meshconn to controller
+	outgoingc := make(chan raftpb.Message)      // from controller to meshconn
+	confchangec := make(chan raftpb.ConfChange) // from meshconn to controller
+	snapshotc := make(chan raftpb.Snapshot)     // from controller to state machine
+	entryc := make(chan raftpb.Entry)           // from controller to state machine
+	proposalc := make(chan []byte)              // from state machine to controller
+
+	// Create the mechanism for signaling conf changes from the router.
+	go membershipLoop(router, confchangec)
 
 	// Create a packet transport.
 	transport := newPacketTransport(peer, incomingc, outgoingc, logger)
 	defer transport.stop()
 
 	// Create the controller, which drives the Raft node internally.
-	controller := newCtrl(self, others, incomingc, outgoingc, snapshotc, entryc, proposalc, logger)
-	defer controller.stop()
+	ctrl := newCtrl(self, others, incomingc, outgoingc, confchangec, snapshotc, entryc, proposalc, logger)
+	defer ctrl.stop()
 
 	// Create the state machine, which also serves our K/V API.
 	stateMachine := newStateMachine(snapshotc, entryc, proposalc, logger)
