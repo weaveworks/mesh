@@ -267,7 +267,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	for {
 		if peers.byShortID[i].peer == nil {
 			if n == 0 {
-				return PeerShortID(i), true
+				return i, true
 			}
 
 			n--
