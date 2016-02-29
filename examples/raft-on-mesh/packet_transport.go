@@ -20,8 +20,6 @@ type packetTransport struct {
 	logger    *log.Logger
 }
 
-// TODO(pb): conf changes
-
 func newPacketTransport(
 	conn net.PacketConn,
 	incomingc chan<- raftpb.Message,

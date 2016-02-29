@@ -19,14 +19,14 @@ import (
 // +-packetTransport---+                |                           |
 // |                   |                |   +-raft.Node---------+   |
 // |  +-meshconn---+   |                |   |                   |   |               +-stateMachine-+
-// |  |    ReadFrom|-->|---incomingc--->|-->|Step        Propose|<--|<--proposalc---|              |
+// |  |    ReadFrom|-->|--incomingc---->|-->|Step        Propose|<--|<--proposalc---|              |
 // |  |            |   |                |   |                   |   |               |              |
 // |  |  .-mesh-.  |   |                |   |                   |   |               |              |
-// |  |  |      |-------->confchangec-->|-->|ProposeConfChange  |   |               |              |
+// |  |  |      |----->|--confchangec-->|-->|ProposeConfChange  |   |               |              |
 // |  |  '------'  |   |                |   |                   |   |               |              |
 // |  |            |   |                |   +-------------------+   |               |              |
 // |  |            |   |                |     |          |    |     |               |              |
-// |  |     WriteTo|<--|<--outgoingc----|<----'          |    '---->|---snapshotc-->|              |
+// |  |     WriteTo|<--|<---outgoingc---|<----'          |    '---->|---snapshotc-->|              |
 // |  +------------+   |                |                '--------->|---entryc----->|              |
 // +-------------------+                +---------------------------+               +--------------+
 
@@ -116,20 +116,9 @@ func (c *ctrl) driveRaft() {
 				return
 			}
 
-		// Served from driveProposals
-		//case data := <-c.proposalc:
-		//	c.logger.Printf("ctrl: incoming proposal (%s)", data)
-		//	c.node.Propose(wackycontext.TODO(), data)
-		//	c.logger.Printf("ctrl: incoming proposal (%s) accepted", data)
-
 		case msg := <-c.incomingc:
 			c.logger.Printf("ctrl: incoming msg (%s)", msg.String())
 			c.node.Step(wackycontext.TODO(), msg)
-
-		// Served from driveProposals
-		//case cc := <-c.confchangec:
-		//	c.logger.Printf("ctrl: incoming confchange ID=%d type=%d nodeID=%d", cc.ID, cc.Type, cc.NodeID)
-		//	c.node.ProposeConfChange(wackycontext.TODO(), cc)
 
 		case <-c.quitc:
 			return
