@@ -45,7 +45,7 @@ type ctrl struct {
 	logger      *log.Logger
 }
 
-const heartbeatTick = 250 // ms
+const heartbeatTick = 2 // 2 * 100 ms = 200 ms
 
 func newCtrl(
 	self net.Addr,
