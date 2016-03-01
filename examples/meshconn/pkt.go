@@ -8,8 +8,9 @@ import (
 )
 
 type pkt struct {
-	Src mesh.PeerName
-	Buf []byte
+	SrcName mesh.PeerName
+	SrcUID  mesh.PeerUID
+	Buf     []byte
 }
 
 func makePkt(buf []byte) pkt {

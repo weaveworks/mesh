@@ -65,7 +65,7 @@ func (s *stateMachine) loop() {
 
 func (s *stateMachine) applySnapshot(snapshot raftpb.Snapshot) error {
 	if len(snapshot.Data) == 0 {
-		s.logger.Printf("state machine: apply snapshot with empty snapshot; skipping")
+		//s.logger.Printf("state machine: apply snapshot with empty snapshot; skipping")
 		return nil
 	}
 	s.logger.Printf("state machine: applying snapshot: size %d", len(snapshot.Data))
@@ -81,11 +81,17 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	case raftpb.EntryNormal:
 		break
 	case raftpb.EntryConfChange:
-		s.logger.Printf("state machine: ignoring ConfChange")
+		s.logger.Printf("state machine: ignoring ConfChange entry")
 		return nil
 	default:
 		s.logger.Printf("state machine: got unknown entry type %s", entry.Type)
 		return fmt.Errorf("unknown entry type %d", entry.Type)
+	}
+
+	// entry.Size can be nonzero when len(entry.Data) == 0
+	if len(entry.Data) <= 0 {
+		s.logger.Printf("state machine: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
+		return nil
 	}
 
 	var single map[string]string
@@ -96,6 +102,8 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	if n := len(single); n != 1 {
 		s.logger.Printf("state machine: got entry with %d keys; strange", n)
 	}
+
+	s.logger.Printf("state machine: applying committed entry %v", single)
 
 	// TODO(pb): maybe early return?
 	// TODO(pb): do I need to validate the index somehow?
@@ -113,7 +121,7 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	return nil
 }
 
-func (s *stateMachine) post(key, value string) error {
+func (s *stateMachine) set(key, value string) error {
 	buf, err := json.Marshal(map[string]string{key: value})
 	if err != nil {
 		return err
@@ -123,22 +131,28 @@ func (s *stateMachine) post(key, value string) error {
 }
 
 func (s *stateMachine) get(key string) (value string, err error) {
+	ready := make(chan struct{})
 	s.actionc <- func() {
+		defer close(ready)
 		if v, ok := s.data[key]; ok {
 			value = v
 		} else {
 			err = fmt.Errorf("%q not found", key)
 		}
 	}
+	<-ready
 	return value, err
 }
 
 func (s *stateMachine) watch(key string, results chan<- string) (cancel chan<- struct{}, err error) {
+	ready := make(chan struct{})
 	s.actionc <- func() {
+		defer close(ready)
 		if _, ok := s.watchers[key]; !ok {
 			s.watchers[key] = map[chan<- string]struct{}{} // first watcher for this key
 		}
 		s.watchers[key][results] = struct{}{} // register the update chan
+		s.logger.Printf("state machine: watch key %q", key)
 		c := make(chan struct{})
 		go func() {
 			<-c                     // when the user cancels the watch,
@@ -147,6 +161,7 @@ func (s *stateMachine) watch(key string, results chan<- string) (cancel chan<- s
 		}()
 		cancel = c
 	}
+	<-ready
 	return cancel, err
 }
 
@@ -168,5 +183,6 @@ func (s *stateMachine) unwatch(key string, c chan<- string) {
 		if len(s.watchers[key]) == 0 {
 			delete(s.watchers, key)
 		}
+		s.logger.Printf("state machine: unwatch key %q", key)
 	}
 }

@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
+	"github.com/bernerdschaefer/eventsource"
+	"github.com/gorilla/mux"
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
@@ -12,33 +15,17 @@ import (
 type store interface {
 	get(key string) (string, error)
 	watch(key string, results chan<- string) (cancel chan<- struct{}, err error)
-	post(key, value string) error
+	set(key, value string) error
 }
 
-func handle(logger *log.Logger, router *mesh.Router, peer *meshconn.Peer, s store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		switch key := r.URL.Path[1:]; len(key) {
-		case 0:
-			switch r.Method {
-			case "GET":
-				handleGetStatus(router, logger)(w, r)
-			case "POST":
-				handlePostRaw(peer, logger)(w, r)
-			default:
-				http.Error(w, "Unsupported method", http.StatusBadRequest)
-			}
-		default:
-			switch r.Method {
-			case "GET":
-				handleGetKey(s, logger)(w, r)
-			case "POST":
-				handlePostKey(s, logger)(w, r)
-			default:
-				http.Error(w, "Unsupported method", http.StatusBadRequest)
-			}
-		}
-
-	}
+func handle(logger *log.Logger, router *mesh.Router, peer *meshconn.Peer, s store) http.Handler {
+	r := mux.NewRouter()
+	r.Methods("GET").Path(`/status`).HandlerFunc(handleGetStatus(router, logger))
+	r.Methods("GET").Path(`/get/{key}`).HandlerFunc(handleGetKey(s, logger))
+	r.Methods("GET").Path(`/watch/{key:.+}`).HandlerFunc(handleWatchKey(s, logger))
+	r.Methods("POST").Path("/set/{key:.+}/{val}").HandlerFunc(handleSetKey(s, logger))
+	r.Methods("POST").Path("/raw").HandlerFunc(handlePostRaw(peer, logger))
+	return r
 }
 
 func handleGetStatus(router *mesh.Router, logger *log.Logger) http.HandlerFunc {
@@ -81,38 +68,77 @@ func handlePostRaw(peer *meshconn.Peer, logger *log.Logger) http.HandlerFunc {
 	}
 }
 
+func handleWatchKey(s store, logger *log.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		eventsource.Handler(func(lastID string, enc *eventsource.Encoder, stop <-chan bool) {
+			key := mux.Vars(r)["key"]
+			logger.Printf("handler: %s watch %q connected", r.RemoteAddr, key)
+			defer logger.Printf("handler: %s watch %q disconnected", r.RemoteAddr, key)
+
+			results := make(chan string)
+			cancel, err := s.watch(key, results)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer close(cancel)
+
+			var id int
+
+			val, err := s.get(key)
+			if err == nil {
+				enc.Encode(eventsource.Event{
+					Type: "initial",
+					ID:   strconv.Itoa(id),
+					Data: []byte(val),
+				})
+			} else {
+				enc.Encode(eventsource.Event{
+					Type: "initial",
+					ID:   strconv.Itoa(id),
+					Data: []byte(err.Error()),
+				})
+
+			}
+			id++
+
+			for {
+				select {
+				case val := <-results:
+					enc.Encode(eventsource.Event{
+						Type: "update",
+						ID:   strconv.Itoa(id),
+						Data: []byte(val),
+					})
+					id++
+
+				case <-stop:
+					return
+				}
+			}
+		}).ServeHTTP(w, r)
+	}
+}
+
 func handleGetKey(s store, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := r.URL.Path[1:]
-		if key == "" {
-			http.Error(w, "no key specified", http.StatusBadRequest)
-			return
-		}
-		value, err := s.get(key)
+		key := mux.Vars(r)["key"]
+		val, err := s.get(key)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		fmt.Fprintf(w, "%q = %q\n", key, value)
+		fmt.Fprintf(w, "%q = %q\n", key, val)
 	}
 }
 
-func handlePostKey(s store, logger *log.Logger) http.HandlerFunc {
+func handleSetKey(s store, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := r.URL.Path[1:]
-		if key == "" {
-			http.Error(w, "no key specified", http.StatusBadRequest)
-			return
-		}
-		value := r.FormValue("value")
-		if value == "" {
-			http.Error(w, "no value specified", http.StatusBadRequest)
-			return
-		}
-		if err := s.post(key, value); err != nil {
+		key, val := mux.Vars(r)["key"], mux.Vars(r)["val"]
+		if err := s.set(key, val); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		fmt.Fprintf(w, "%q = %q proposed\n", key, value)
+		fmt.Fprintf(w, "%q = %q proposed\n", key, val)
 	}
 }

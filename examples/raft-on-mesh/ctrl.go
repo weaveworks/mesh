@@ -11,51 +11,63 @@ import (
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 
-	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
 
-//                                      +-ctrl----------------------+
-// +-packetTransport---+                |                           |
-// |                   |                |   +-raft.Node---------+   |
-// |  +-meshconn---+   |                |   |                   |   |               +-stateMachine-+
-// |  |    ReadFrom|-->|--incomingc---->|-->|Step        Propose|<--|<--proposalc---|              |
-// |  |            |   |                |   |                   |   |               |              |
-// |  |  .-mesh-.  |   |                |   |                   |   |               |              |
-// |  |  |      |----->|--confchangec-->|-->|ProposeConfChange  |   |               |              |
-// |  |  '------'  |   |                |   |                   |   |               |              |
-// |  |            |   |                |   +-------------------+   |               |              |
-// |  |            |   |                |     |          |    |     |               |              |
-// |  |     WriteTo|<--|<---outgoingc---|<----'          |    '---->|---snapshotc-->|              |
-// |  +------------+   |                |                '--------->|---entryc----->|              |
-// +-------------------+                +---------------------------+               +--------------+
+// +-------------+   +-----------------+               +-------------------------+   +-------+
+// | mesh.Router |   | packetTransport |               |          ctrl           |   | state |
+// |             |   |                 |               |  +-------------------+  |   |       |
+// |             |   |  +----------+   |               |  |     raft.Node     |  |   |       |
+// |             |   |  | meshconn |   |               |  |                   |  |   |       |
+// |             |======|  ReadFrom|-----incomingc------->|Step        Propose|<-----|    API|<---
+// |             |   |  |   WriteTo|<--------outgoingc----|                   |  |   |       |
+// |             |   |  +----------+   |               |  |                   |  |   |       |
+// |             |   +-----------------+               |  |                   |  |   |       |
+// |             |                                     |  |                   |  |   +-------+
+// |             |   +------------+  +--------------+  |  |                   |  |     ^   ^
+// |             |===| membership |->| configurator |---->|ProposeConfChange  |  |     |   |
+// +-------------+   +------------+  +--------------+  |  |                   |  |     |   |
+//                                          ^          |  +-------------------+  |     |   |
+//                                          |          |       |         |       |     |   |
+//                                          |          +-------|---------|-------+     |   |
+//                H E R E                   |                entryc   snapshotc        |   |
+//                  B E                     |                  |         |             |   |
+//             D R A G O N S                |                  |         '-------------'   |
+//                                          |                  v                           |
+//                                          |  ConfChange +---------+ Normal               |
+//                                          '-------------| demuxer |----------------------'
+//                                                        +---------+
 
 type ctrl struct {
-	self        raft.Peer
-	others      []raft.Peer
-	incomingc   <-chan raftpb.Message    // from the transport
-	outgoingc   chan<- raftpb.Message    // to the transport
-	confchangec <-chan raftpb.ConfChange // from the mesh
-	snapshotc   chan<- raftpb.Snapshot   // to the state machine
-	entryc      chan<- raftpb.Entry      // to the state machine
-	proposalc   <-chan []byte            // from the state machine
-	quitc       chan struct{}
-	storage     *raft.MemoryStorage
-	node        raft.Node
-	logger      *log.Logger
+	self         raft.Peer
+	minPeerCount int
+	incomingc    <-chan raftpb.Message    // from the transport
+	outgoingc    chan<- raftpb.Message    // to the transport
+	unreachablec <-chan uint64            // from the transport
+	confchangec  <-chan raftpb.ConfChange // from the mesh
+	snapshotc    chan<- raftpb.Snapshot   // to the state machine
+	entryc       chan<- raftpb.Entry      // to the demuxer
+	proposalc    <-chan []byte            // from the state machine
+	stopc        chan struct{}            // from stop()
+	removedc     chan<- struct{}          // to calling context
+	terminatedc  chan struct{}
+	storage      *raft.MemoryStorage
+	node         raft.Node
+	logger       *log.Logger
 }
-
-const heartbeatTick = 2 // 2 * 100 ms = 200 ms
 
 func newCtrl(
 	self net.Addr,
-	others []net.Addr,
+	others []net.Addr, // to join existing cluster, pass nil or empty others
+	minPeerCount int,
 	incomingc <-chan raftpb.Message,
 	outgoingc chan<- raftpb.Message,
+	unreachablec <-chan uint64,
 	confchangec <-chan raftpb.ConfChange,
 	snapshotc chan<- raftpb.Snapshot,
 	entryc chan<- raftpb.Entry,
 	proposalc <-chan []byte,
+	removedc chan<- struct{},
 	logger *log.Logger,
 ) *ctrl {
 	storage := raft.NewMemoryStorage()
@@ -63,8 +75,8 @@ func newCtrl(
 	raftLogger.EnableDebug()
 	nodeConfig := &raft.Config{
 		ID:              makeRaftPeer(self).ID,
-		ElectionTick:    10 * heartbeatTick,
-		HeartbeatTick:   heartbeatTick,
+		ElectionTick:    10,
+		HeartbeatTick:   1,
 		Storage:         storage,
 		Applied:         0,    // starting fresh
 		MaxSizePerMsg:   4096, // TODO(pb): looks like bytes; confirm that
@@ -72,32 +84,57 @@ func newCtrl(
 		CheckQuorum:     true, // leader steps down if quorum is not active for an electionTimeout
 		Logger:          raftLogger,
 	}
-	node := raft.StartNode(nodeConfig, makeRaftPeers(others))
-	c := &ctrl{
-		self:        makeRaftPeer(self),
-		others:      makeRaftPeers(others),
-		incomingc:   incomingc,
-		outgoingc:   outgoingc,
-		confchangec: confchangec,
-		snapshotc:   snapshotc,
-		entryc:      entryc,
-		proposalc:   proposalc,
-		quitc:       make(chan struct{}),
-		storage:     storage,
-		node:        node,
-		logger:      logger,
+
+	startPeers := makeRaftPeers(others)
+	if len(startPeers) == 0 {
+		startPeers = nil // special case: join existing
 	}
-	go c.driveRaft()      // analagous to raftexample serveChannels
-	go c.driveProposals() // analagous to raftexample serveChannels anonymous goroutine
+	node := raft.StartNode(nodeConfig, startPeers)
+
+	c := &ctrl{
+		self:         makeRaftPeer(self),
+		minPeerCount: minPeerCount,
+		incomingc:    incomingc,
+		outgoingc:    outgoingc,
+		unreachablec: unreachablec,
+		confchangec:  confchangec,
+		snapshotc:    snapshotc,
+		entryc:       entryc,
+		proposalc:    proposalc,
+		stopc:        make(chan struct{}),
+		removedc:     removedc,
+		terminatedc:  make(chan struct{}),
+		storage:      storage,
+		node:         node,
+		logger:       logger,
+	}
+	go c.driveRaft() // analagous to raftexample serveChannels
 	return c
 }
 
+// It is a programmer error to call stop more than once.
 func (c *ctrl) stop() {
-	close(c.quitc)
+	close(c.stopc)
+	<-c.terminatedc
 }
 
 func (c *ctrl) driveRaft() {
 	defer c.logger.Printf("ctrl: driveRaft loop exit")
+	defer close(c.terminatedc)
+	defer c.node.Stop()
+
+	// We own driveProposals. We may terminate when the user invokes stop, or when
+	// the Raft Node shuts down, which is generally when it receives a ConfChange
+	// that removes it from the cluster. In either case, we kill driveProposals,
+	// and wait for it to exit before returning.
+	cancel := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		c.driveProposals(cancel)
+		close(done)
+	}()
+	defer func() { <-done }() // order is important here
+	defer close(cancel)       //
 
 	// Now that we are holding a raft.Node we have a few responsibilities.
 	// https://godoc.org/github.com/coreos/etcd/raft
@@ -112,46 +149,52 @@ func (c *ctrl) driveRaft() {
 
 		case r := <-c.node.Ready():
 			if err := c.handleReady(r); err != nil {
-				c.logger.Printf("ctrl: handle ready: %v", err)
+				c.logger.Printf("ctrl: handle ready: %v (aborting)", err)
+				close(c.removedc)
 				return
 			}
 
 		case msg := <-c.incomingc:
-			c.logger.Printf("ctrl: incoming msg (%s)", msg.String())
 			c.node.Step(wackycontext.TODO(), msg)
 
-		case <-c.quitc:
+		case id := <-c.unreachablec:
+			c.node.ReportUnreachable(id)
+
+		case <-c.stopc:
 			return
 		}
 	}
 }
 
-func (c *ctrl) driveProposals() {
+func (c *ctrl) driveProposals(cancel <-chan struct{}) {
 	defer c.logger.Printf("ctrl: driveProposals loop exit")
+
+	// driveProposals is a separate goroutine from driveRaft, to mirror
+	// contrib/raftexample. To be honest, it's not clear to me why that should be
+	// required; it seems like we should be able to drive these channels in the
+	// same for/select loop as the others. But we have strange errors (likely
+	// deadlocks) if we structure it that way.
 
 	for c.proposalc != nil && c.confchangec != nil {
 		select {
 		case data, ok := <-c.proposalc:
 			if !ok {
 				c.logger.Printf("ctrl: got nil proposal; shutting down proposals")
-				c.proposalc = nil // TODO(pb): is this safe?
+				c.proposalc = nil
 				continue
 			}
-			c.logger.Printf("ctrl: incoming proposal (%s)", data)
 			c.node.Propose(wackycontext.TODO(), data)
-			c.logger.Printf("ctrl: incoming proposal (%s) accepted", data)
 
 		case cc, ok := <-c.confchangec:
 			if !ok {
 				c.logger.Printf("ctrl: got nil conf change; shutting down conf changes")
-				c.confchangec = nil // TODO(pb): is this safe?
+				c.confchangec = nil
 				continue
 			}
-			c.logger.Printf("ctrl: incoming confchange ID=%d type=%d nodeID=%d", cc.ID, cc.Type, cc.NodeID)
+			c.logger.Printf("ctrl: ProposeConfChange %s %x", cc.Type, cc.NodeID)
 			c.node.ProposeConfChange(wackycontext.TODO(), cc)
-			c.logger.Printf("ctrl: incoming confchange ID=%d type=%d nodeID=%d accepted", cc.ID, cc.Type, cc.NodeID)
 
-		case <-c.quitc:
+		case <-cancel:
 			return
 		}
 	}
@@ -220,6 +263,7 @@ func (c *ctrl) readySave(snapshot raftpb.Snapshot, hardState raftpb.HardState, e
 
 func (c *ctrl) readySend(msgs []raftpb.Message) {
 	for _, msg := range msgs {
+		// If this fails, the transport will tell us asynchronously via unreachablec.
 		c.outgoingc <- msg
 
 		if msg.Type == raftpb.MsgSnap {
@@ -256,14 +300,17 @@ func (c *ctrl) readyAdvance() {
 	c.node.Advance()
 }
 
-// makeRaftPeer converts a net.Addr into a raft.Peer with no context.
+// makeRaftPeer converts a net.Addr into a raft.Peer.
 // All peers must perform the Addr-to-Peer mapping in the same way.
-// We assume peer_name_mac and treat the uint64 as the raft.Peer.ID.
-// To break this coupling, we would need to hash the addr.String()
-// and maintain two lookup tables: hash-to-PeerName, and ID-to-hash.
+//
+// The etcd Raft implementation tracks the committed entry for each node ID,
+// and panics if it discovers a node has lost previously committed entries.
+// In effect, it assumes commitment implies durability. But our storage is
+// explicitly non-durable. So, whenever a node restarts, we need to give it
+// a brand new ID. That is the peer UID.
 func makeRaftPeer(addr net.Addr) raft.Peer {
 	return raft.Peer{
-		ID:      uint64(addr.(meshconn.MeshAddr).PeerName),
+		ID:      uint64(addr.(meshconn.MeshAddr).PeerUID),
 		Context: nil, // TODO(pb): ??
 	}
 }
@@ -274,13 +321,4 @@ func makeRaftPeers(addrs []net.Addr) []raft.Peer {
 		peers[i] = makeRaftPeer(addr)
 	}
 	return peers
-}
-
-// makeAddr converts a raft.Peer ID to a net.Addr that can be given as a dst to
-// the net.PacketConn. It assumes peer_name_mac. To break this coupling, we
-// would need to query an ID-to-hash, then hash-to-PeerName lookup table.
-func makeAddr(raftPeerID uint64) net.Addr {
-	return meshconn.MeshAddr{
-		PeerName: mesh.PeerName(raftPeerID),
-	}
 }
