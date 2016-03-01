@@ -20,7 +20,7 @@ func membershipLoop(router *mesh.Router, confchangec chan<- raftpb.ConfChange) {
 	)
 
 	for range ticker.C {
-		members, add, rem = diff(members, membership(router))
+		add, rem, members = diff(members, membership(router))
 		for _, nodeID := range add {
 			confchangec <- raftpb.ConfChange{
 				ID:      uint64(router.Ourself.Peer.Name),
