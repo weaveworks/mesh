@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -66,7 +65,6 @@ func (conn *remoteConnection) log(args ...interface{}) {
 type LocalConnection struct {
 	OverlayConn OverlayConnection
 
-	mtx sync.RWMutex
 	remoteConnection
 	tcpConn         *net.TCPConn
 	trustRemote     bool // is remote on a trusted subnet?
