@@ -19,6 +19,7 @@ package mesh
 // the network interface the peer is sniffing on.
 
 import (
+	"fmt"
 	"net"
 )
 
@@ -45,11 +46,35 @@ func PeerNameFromUserInput(userInput string) (PeerName, error) {
 
 // PeerNameFromString parses PeerName from a generic string.
 func PeerNameFromString(nameStr string) (PeerName, error) {
-	mac, err := net.ParseMAC(nameStr)
-	if err != nil {
-		return UnknownPeerName, err
+	var a, b, c, d, e, f uint64
+
+	match := func(format string, args ...interface{}) bool {
+		a, b, c, d, e, f = 0, 0, 0, 0, 0, 0
+		n, err := fmt.Sscanf(nameStr+"\000", format+"\000", args...)
+		return err == nil && n == len(args)
 	}
-	return PeerName(macint(mac)), nil
+
+	switch {
+	case match("%2x:%2x:%2x:%2x:%2x:%2x", &a, &b, &c, &d, &e, &f):
+	case match("::%2x:%2x:%2x:%2x", &c, &d, &e, &f):
+	case match("%2x::%2x:%2x:%2x", &a, &d, &e, &f):
+	case match("%2x:%2x::%2x:%2x", &a, &b, &e, &f):
+	case match("%2x:%2x:%2x::%2x", &a, &b, &c, &f):
+	case match("%2x:%2x:%2x:%2x::", &a, &b, &c, &d):
+	case match("::%2x:%2x:%2x", &d, &e, &f):
+	case match("%2x::%2x:%2x", &a, &e, &f):
+	case match("%2x:%2x::%2x", &a, &b, &f):
+	case match("%2x:%2x:%2x::", &a, &b, &c):
+	case match("::%2x:%2x", &e, &f):
+	case match("%2x::%2x", &a, &f):
+	case match("%2x:%2x::", &a, &b):
+	case match("::%2x", &f):
+	case match("%2x::", &a):
+	default:
+		return UnknownPeerName, fmt.Errorf("invalid peer name format")
+	}
+
+	return PeerName(a<<40 | b<<32 | c<<24 | d<<16 | e<<8 | f), nil
 }
 
 // PeerNameFromBin parses PeerName from a byte slice.

@@ -16,6 +16,6 @@ gometalinter \
 	--exclude='duplicate of.*_test.go.*\(dupl\)$' \
 	--disable=aligncheck \
 	--disable=gotype \
-	--cyclo-over=15 \
+	--cyclo-over=20 \
 	--tests \
 	--deadline=10s
