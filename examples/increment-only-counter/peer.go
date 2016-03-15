@@ -1,8 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
+
+	"bytes"
+	"encoding/gob"
 
 	"github.com/weaveworks/mesh"
 )
@@ -25,10 +27,10 @@ var _ mesh.Gossiper = &peer{}
 // Construct a peer with empty state.
 // Be sure to register a channel, later,
 // so we can make outbound communication.
-func newPeer(logger *log.Logger) *peer {
+func newPeer(self mesh.PeerName, logger *log.Logger) *peer {
 	actions := make(chan func())
 	p := &peer{
-		st:      newState(),
+		st:      newState(self),
 		send:    nil, // must .register() later
 		actions: actions,
 		quit:    make(chan struct{}),
@@ -54,32 +56,23 @@ func (p *peer) register(send mesh.Gossip) {
 	p.actions <- func() { p.send = send }
 }
 
-// Return the current value of the key.
-func (p *peer) get(key string) (result int, ok bool) {
-	c := make(chan struct{})
-	p.actions <- func() {
-		defer close(c)
-		result, ok = p.st.set[key]
-	}
-	<-c
-	return result, ok
+// Return the current value of the counter.
+func (p *peer) get() int {
+	return p.st.get()
 }
 
-// Set key to value, and return the new value.
-// The returned result may be different from the passed value,
-// if the passed value is lower than the existing result.
-func (p *peer) set(key string, value int) (result int) {
+// Increment the counter by one.
+func (p *peer) incr() (result int) {
 	c := make(chan struct{})
 	p.actions <- func() {
 		defer close(c)
-		st := newState().mergeComplete(map[string]int{key: value})
-		data := p.st.Merge(st)
+		st := p.st.incr()
 		if p.send != nil {
 			p.send.GossipBroadcast(st)
 		} else {
 			log.Printf("no sender configured; not broadcasting update right now")
 		}
-		result = data.(*state).set[key]
+		result = st.get()
 	}
 	<-c
 	return result
@@ -99,8 +92,8 @@ func (p *peer) Gossip() (complete mesh.GossipData) {
 // Merge the gossiped data represented by buf into our state.
 // Return the state information that was modified.
 func (p *peer) OnGossip(buf []byte) (delta mesh.GossipData, err error) {
-	var set map[string]int
-	if err := json.Unmarshal(buf, &set); err != nil {
+	var set map[mesh.PeerName]int
+	if err := gob.NewDecoder(bytes.NewReader(buf)).Decode(&set); err != nil {
 		return nil, err
 	}
 
@@ -116,8 +109,8 @@ func (p *peer) OnGossip(buf []byte) (delta mesh.GossipData, err error) {
 // Merge the gossiped data represented by buf into our state.
 // Return the state information that was modified.
 func (p *peer) OnGossipBroadcast(src mesh.PeerName, buf []byte) (received mesh.GossipData, err error) {
-	var set map[string]int
-	if err := json.Unmarshal(buf, &set); err != nil {
+	var set map[mesh.PeerName]int
+	if err := gob.NewDecoder(bytes.NewReader(buf)).Decode(&set); err != nil {
 		return nil, err
 	}
 
@@ -132,8 +125,8 @@ func (p *peer) OnGossipBroadcast(src mesh.PeerName, buf []byte) (received mesh.G
 
 // Merge the gossiped data represented by buf into our state.
 func (p *peer) OnGossipUnicast(src mesh.PeerName, buf []byte) error {
-	var set map[string]int
-	if err := json.Unmarshal(buf, &set); err != nil {
+	var set map[mesh.PeerName]int
+	if err := gob.NewDecoder(bytes.NewReader(buf)).Decode(&set); err != nil {
 		return err
 	}
 

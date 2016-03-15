@@ -55,7 +55,7 @@ func main() {
 		TrustedSubnets:     []*net.IPNet{},
 	}, name, *nickname, mesh.NullOverlay{})
 
-	peer := newPeer(log.New(os.Stderr, *nickname+"> ", log.LstdFlags))
+	peer := newPeer(name, log.New(os.Stderr, *nickname+"> ", log.LstdFlags))
 	gossip := router.NewGossip(*channel, peer)
 	peer.register(gossip)
 
@@ -87,45 +87,19 @@ func main() {
 	log.Print(<-errs)
 }
 
-type kv interface {
-	get(key string) (result int, ok bool)
-	set(key string, value int) (result int)
+type counter interface {
+	get() int
+	incr() int
 }
 
-func handle(kv kv) http.HandlerFunc {
+func handle(c counter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
-			key := r.FormValue("key")
-			if key == "" {
-				http.Error(w, "no key specified", http.StatusBadRequest)
-				return
-			}
-			result, ok := kv.get(key)
-			if !ok {
-				http.Error(w, fmt.Sprintf("%s not found", key), http.StatusNotFound)
-				return
-			}
-			fmt.Fprintf(w, "get(%s) => %d\n", key, result)
+			fmt.Fprintf(w, "get => %d\n", c.get())
 
 		case "POST":
-			key := r.FormValue("key")
-			if key == "" {
-				http.Error(w, "no key specified", http.StatusBadRequest)
-				return
-			}
-			valueStr := r.FormValue("value")
-			if valueStr == "" {
-				http.Error(w, "no value specified", http.StatusBadRequest)
-				return
-			}
-			value, err := strconv.Atoi(valueStr)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			result := kv.set(key, value)
-			fmt.Fprintf(w, "set(%s, %d) => %d\n", key, value, result)
+			fmt.Fprintf(w, "incr => %d\n", c.incr())
 		}
 	}
 }
