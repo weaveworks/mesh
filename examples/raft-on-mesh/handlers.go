@@ -8,6 +8,7 @@ import (
 
 	"github.com/bernerdschaefer/eventsource"
 	"github.com/gorilla/mux"
+
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
