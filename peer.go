@@ -31,6 +31,7 @@ type peerSummary struct {
 type PeerDescription struct {
 	Name           PeerName
 	NickName       string
+	UID            PeerUID
 	Self           bool
 	NumConnections int
 }

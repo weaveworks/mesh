@@ -9,7 +9,8 @@ import (
 
 // MeshAddr implements net.Addr for mesh peers.
 type MeshAddr struct {
-	mesh.PeerName
+	mesh.PeerName // stable across invocations
+	mesh.PeerUID  // new with each invocation
 }
 
 var _ net.Addr = MeshAddr{}

@@ -33,6 +33,7 @@ var (
 // Peer implements mesh.Gossiper and net.PacketConn.
 type Peer struct {
 	name    mesh.PeerName
+	uid     mesh.PeerUID
 	gossip  mesh.Gossip
 	recv    chan pkt
 	actions chan func()
@@ -43,9 +44,10 @@ type Peer struct {
 // NewPeer returns a Peer, which can be used as a net.PacketConn.
 // Clients must Register a mesh.Gossip before calling ReadFrom or WriteTo.
 // Clients should aggressively consume from ReadFrom.
-func NewPeer(name mesh.PeerName, logger *log.Logger) *Peer {
+func NewPeer(name mesh.PeerName, uid mesh.PeerUID, logger *log.Logger) *Peer {
 	p := &Peer{
 		name:    name,
+		uid:     uid,
 		gossip:  nil, // initially no gossip
 		recv:    make(chan pkt),
 		actions: make(chan func()),
@@ -83,7 +85,7 @@ func (p *Peer) ReadFrom(b []byte) (n int, remote net.Addr, err error) {
 			select {
 			case pkt := <-p.recv:
 				n = copy(b, pkt.Buf)
-				remote = MeshAddr{pkt.Src}
+				remote = MeshAddr{PeerName: pkt.SrcName, PeerUID: pkt.SrcUID}
 				if n < len(pkt.Buf) {
 					err = ErrShortRead
 				}
@@ -110,7 +112,7 @@ func (p *Peer) WriteTo(b []byte, dst net.Addr) (n int, err error) {
 			err = ErrNotMeshAddr
 			return
 		}
-		pkt := pkt{Src: p.name, Buf: b}
+		pkt := pkt{SrcName: p.name, SrcUID: p.uid, Buf: b}
 		if meshAddr.PeerName == p.name {
 			p.recv <- pkt
 			return
@@ -132,7 +134,7 @@ func (p *Peer) Close() error {
 
 // LocalAddr implements net.PacketConn.
 func (p *Peer) LocalAddr() net.Addr {
-	return MeshAddr{p.name}
+	return MeshAddr{PeerName: p.name, PeerUID: p.uid}
 }
 
 // SetDeadline implements net.PacketConn.

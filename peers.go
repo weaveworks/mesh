@@ -75,6 +75,7 @@ func (peers *Peers) Descriptions() []PeerDescription {
 		descriptions = append(descriptions, PeerDescription{
 			Name:           peer.Name,
 			NickName:       peer.peerSummary.NickName,
+			UID:            peer.UID,
 			Self:           peer.Name == peers.ourself.Name,
 			NumConnections: len(peer.connections),
 		})
