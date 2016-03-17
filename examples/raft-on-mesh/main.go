@@ -150,8 +150,8 @@ func main() {
 	// Create the demuxer, splitting all committed entries to ConfChange and Normal entries.
 	go demux(entryc, confentryc, normalentryc)
 
-	// Create the store, which also serves our K/V API.
-	store := newStore(snapshotc, normalentryc, proposalc, logger)
+	// Create the HTTP simple store. For now.
+	simpleStore := newSimpleStore(snapshotc, entryc, proposalc, logger)
 
 	errs := make(chan error, 3)
 	go func() {
@@ -160,8 +160,8 @@ func main() {
 		errs <- fmt.Errorf("%s", <-c)
 	}()
 	go func() {
-		logger.Printf("HTTP server starting (%s)", *httpListen)
-		http.Handle("/", handle(logger, router, peer, store))
+		logger.Printf("HTTP simple store starting (%s)", *httpListen)
+		http.Handle("/", makeHandler(router, peer, simpleStore, logger))
 		errs <- http.ListenAndServe(*httpListen, nil)
 	}()
 	go func() {
