@@ -9,7 +9,7 @@ import (
 	"github.com/coreos/etcd/raft/raftpb"
 )
 
-type stateMachine struct {
+type store struct {
 	mtx       sync.RWMutex
 	data      map[string]string
 	watchers  map[string]map[chan<- string]struct{}
@@ -21,13 +21,13 @@ type stateMachine struct {
 	logger    *log.Logger
 }
 
-func newStateMachine(
+func newStore(
 	snapshotc chan raftpb.Snapshot,
 	entryc chan raftpb.Entry,
 	proposalc chan []byte,
 	logger *log.Logger,
-) *stateMachine {
-	sm := &stateMachine{
+) *store {
+	sm := &store{
 		data:      map[string]string{},
 		watchers:  map[string]map[chan<- string]struct{}{},
 		snapshotc: snapshotc,
@@ -41,7 +41,7 @@ func newStateMachine(
 	return sm
 }
 
-func (s *stateMachine) loop() {
+func (s *store) loop() {
 	for {
 		select {
 		case snapshot := <-s.snapshotc:
@@ -63,7 +63,7 @@ func (s *stateMachine) loop() {
 	}
 }
 
-func (s *stateMachine) applySnapshot(snapshot raftpb.Snapshot) error {
+func (s *store) applySnapshot(snapshot raftpb.Snapshot) error {
 	if len(snapshot.Data) == 0 {
 		//s.logger.Printf("state machine: apply snapshot with empty snapshot; skipping")
 		return nil
@@ -76,7 +76,7 @@ func (s *stateMachine) applySnapshot(snapshot raftpb.Snapshot) error {
 	return nil
 }
 
-func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
+func (s *store) applyCommittedEntry(entry raftpb.Entry) error {
 	switch entry.Type {
 	case raftpb.EntryNormal:
 		break
@@ -121,7 +121,7 @@ func (s *stateMachine) applyCommittedEntry(entry raftpb.Entry) error {
 	return nil
 }
 
-func (s *stateMachine) set(key, value string) error {
+func (s *store) set(key, value string) error {
 	buf, err := json.Marshal(map[string]string{key: value})
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (s *stateMachine) set(key, value string) error {
 	return nil
 }
 
-func (s *stateMachine) get(key string) (value string, err error) {
+func (s *store) get(key string) (value string, err error) {
 	ready := make(chan struct{})
 	s.actionc <- func() {
 		defer close(ready)
@@ -144,7 +144,7 @@ func (s *stateMachine) get(key string) (value string, err error) {
 	return value, err
 }
 
-func (s *stateMachine) watch(key string, results chan<- string) (cancel chan<- struct{}, err error) {
+func (s *store) watch(key string, results chan<- string) (cancel chan<- struct{}, err error) {
 	ready := make(chan struct{})
 	s.actionc <- func() {
 		defer close(ready)
@@ -165,7 +165,7 @@ func (s *stateMachine) watch(key string, results chan<- string) (cancel chan<- s
 	return cancel, err
 }
 
-func (s *stateMachine) unwatch(key string, c chan<- string) {
+func (s *store) unwatch(key string, c chan<- string) {
 	s.actionc <- func() {
 		if _, ok := s.watchers[key]; !ok {
 			s.logger.Printf("state machine: unwatch key %q had no watchers; strange", key)

@@ -150,8 +150,8 @@ func main() {
 	// Create the demuxer, splitting all committed entries to ConfChange and Normal entries.
 	go demux(entryc, confentryc, normalentryc)
 
-	// Create the state machine, which also serves our K/V API.
-	stateMachine := newStateMachine(snapshotc, normalentryc, proposalc, logger)
+	// Create the store, which also serves our K/V API.
+	store := newStore(snapshotc, normalentryc, proposalc, logger)
 
 	errs := make(chan error, 3)
 	go func() {
@@ -161,7 +161,7 @@ func main() {
 	}()
 	go func() {
 		logger.Printf("HTTP server starting (%s)", *httpListen)
-		http.Handle("/", handle(logger, router, peer, stateMachine))
+		http.Handle("/", handle(logger, router, peer, store))
 		errs <- http.ListenAndServe(*httpListen, nil)
 	}()
 	go func() {

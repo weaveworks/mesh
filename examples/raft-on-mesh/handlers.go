@@ -13,18 +13,18 @@ import (
 	"github.com/weaveworks/mesh/examples/meshconn"
 )
 
-type store interface {
+type kv interface {
 	get(key string) (string, error)
 	watch(key string, results chan<- string) (cancel chan<- struct{}, err error)
 	set(key, value string) error
 }
 
-func handle(logger *log.Logger, router *mesh.Router, peer *meshconn.Peer, s store) http.Handler {
+func handle(logger *log.Logger, router *mesh.Router, peer *meshconn.Peer, kv kv) http.Handler {
 	r := mux.NewRouter()
 	r.Methods("GET").Path(`/status`).HandlerFunc(handleGetStatus(router, logger))
-	r.Methods("GET").Path(`/get/{key}`).HandlerFunc(handleGetKey(s, logger))
-	r.Methods("GET").Path(`/watch/{key:.+}`).HandlerFunc(handleWatchKey(s, logger))
-	r.Methods("POST").Path("/set/{key:.+}/{val}").HandlerFunc(handleSetKey(s, logger))
+	r.Methods("GET").Path(`/get/{key}`).HandlerFunc(handleGetKey(kv, logger))
+	r.Methods("GET").Path(`/watch/{key:.+}`).HandlerFunc(handleWatchKey(kv, logger))
+	r.Methods("POST").Path("/set/{key:.+}/{val}").HandlerFunc(handleSetKey(kv, logger))
 	r.Methods("POST").Path("/raw").HandlerFunc(handlePostRaw(peer, logger))
 	return r
 }
@@ -69,7 +69,7 @@ func handlePostRaw(peer *meshconn.Peer, logger *log.Logger) http.HandlerFunc {
 	}
 }
 
-func handleWatchKey(s store, logger *log.Logger) http.HandlerFunc {
+func handleWatchKey(kv kv, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		eventsource.Handler(func(lastID string, enc *eventsource.Encoder, stop <-chan bool) {
 			key := mux.Vars(r)["key"]
@@ -77,7 +77,7 @@ func handleWatchKey(s store, logger *log.Logger) http.HandlerFunc {
 			defer logger.Printf("handler: %s watch %q disconnected", r.RemoteAddr, key)
 
 			results := make(chan string)
-			cancel, err := s.watch(key, results)
+			cancel, err := kv.watch(key, results)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -86,7 +86,7 @@ func handleWatchKey(s store, logger *log.Logger) http.HandlerFunc {
 
 			var id int
 
-			val, err := s.get(key)
+			val, err := kv.get(key)
 			if err == nil {
 				enc.Encode(eventsource.Event{
 					Type: "initial",
@@ -121,10 +121,10 @@ func handleWatchKey(s store, logger *log.Logger) http.HandlerFunc {
 	}
 }
 
-func handleGetKey(s store, logger *log.Logger) http.HandlerFunc {
+func handleGetKey(kv kv, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := mux.Vars(r)["key"]
-		val, err := s.get(key)
+		val, err := kv.get(key)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -133,10 +133,10 @@ func handleGetKey(s store, logger *log.Logger) http.HandlerFunc {
 	}
 }
 
-func handleSetKey(s store, logger *log.Logger) http.HandlerFunc {
+func handleSetKey(kv kv, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key, val := mux.Vars(r)["key"], mux.Vars(r)["val"]
-		if err := s.set(key, val); err != nil {
+		if err := kv.set(key, val); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
