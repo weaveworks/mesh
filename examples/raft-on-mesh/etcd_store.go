@@ -42,6 +42,9 @@ type etcdStore struct {
 
 	kv     storage.KV
 	lessor lease.Lessor
+
+	idgen   <-chan uint64
+	pending map[uint64]chan<- wackyproto.Message
 }
 
 func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, entryc <-chan raftpb.Entry, logger *log.Logger) *etcdStore {
@@ -56,16 +59,55 @@ func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, ent
 
 		kv:     nil, // TODO(pb)
 		lessor: nil, // TODO(pb)
+
+		idgen:   makeIDGen(),
+		pending: map[uint64]chan<- wackyproto.Message{},
 	}
 	go s.loop()
 	return s
 }
 
-// Range gets the keys in the range from the store.
-func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
-	return nil, errors.New("not implemented")
+func makeIDGen() <-chan uint64 {
+	c := make(chan uint64)
+	go func() {
+		var i uint64 = 1
+		for {
+			c <- i
+			i++
+		}
+	}()
+	return c
 }
 
+const (
+	maxRequestBytes = 8192
+)
+
+var (
+	errStopped = errors.New("etcd store was stopped")
+	errTooBig  = errors.New("request too large to send")
+)
+
+// Range implements gRPC KVServer.
+// Range gets the keys in the range from the store.
+func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
+	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Range: req}
+	c, err := s.proposeInternalRaftRequest(ireq)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		s.cancelInternalRaftRequest(ireq)
+		return nil, ctx.Err()
+	case msg := <-c:
+		return msg.(*etcdserverpb.RangeResponse), nil
+	case <-s.quitc:
+		return nil, errStopped
+	}
+}
+
+// Put implements gRPC KVServer.
 // Put puts the given key into the store.
 // A put request increases the revision of the store,
 // and generates one event in the event history.
@@ -73,6 +115,7 @@ func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) 
 	return nil, errors.New("not implemented")
 }
 
+// Delete implements gRPC KVServer.
 // Delete deletes the given range from the store.
 // A delete request increase the revision of the store,
 // and generates one event in the event history.
@@ -80,6 +123,7 @@ func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.Dele
 	return nil, errors.New("not implemented")
 }
 
+// Txn implements gRPC KVServer.
 // Txn processes all the requests in one transaction.
 // A txn request increases the revision of the store,
 // and generates events with the same revision in the event history.
@@ -88,12 +132,14 @@ func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) 
 	return nil, errors.New("not implemented")
 }
 
+// Compact implements gRPC KVServer.
 // Compact compacts the event history in s. User should compact the
 // event history periodically, or it will grow infinitely.
 func (s *etcdStore) Compact(ctx wackycontext.Context, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
+// Hash implements gRPC KVServer.
 // Hash returns the hash of local KV state for consistency checking purpose.
 // This is designed for testing purpose. Do not use this in production when there
 // are ongoing transactions.
@@ -180,18 +226,24 @@ func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
 }
 
 // From public API method to proposalc.
-func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) error {
+func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (<-chan wackyproto.Message, error) {
 	data, err := req.Marshal()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// TODO(pb): wire up pending
+	if len(data) > maxRequestBytes {
+		return nil, errTooBig
+	}
+	c, err := s.registerPending(req.ID)
+	if err != nil {
+		return nil, err
+	}
 	s.proposalc <- data
-	return nil
+	return c, nil
 }
 
 func (s *etcdStore) cancelInternalRaftRequest(req etcdserverpb.InternalRaftRequest) error {
-	// TODO(pb): manage pending
+	s.cancelPending(req.ID)
 	return nil
 }
 
@@ -218,8 +270,41 @@ func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftReques
 	}
 }
 
+func (s *etcdStore) registerPending(id uint64) (<-chan wackyproto.Message, error) {
+	if _, ok := s.pending[id]; ok {
+		return nil, fmt.Errorf("pending ID %d already registered", id)
+	}
+	c := make(chan wackyproto.Message)
+	s.pending[id] = c
+	return c, nil
+}
+
+func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
+	c, ok := s.pending[id]
+	if !ok {
+		s.logger.Printf("etcd store: signal pending ID %d, but nothing was pending; perhaps it was canceled?", id)
+		return
+	}
+	c <- msg
+	delete(s.pending, id)
+}
+
+func (s *etcdStore) cancelPending(id uint64) {
+	if _, ok := s.pending[id]; !ok {
+		s.logger.Printf("etcd store: cancel pending ID %d, but nothing was pending; strange", id)
+		return
+	}
+	delete(s.pending, id)
+}
+
 // Sentinel value to indicate the operation is not part of a transaction.
 const noTxn = -1
+
+// isGteRange determines if the range end is a >= range. This works around grpc
+// sending empty byte strings as nil; >= is encoded in the range end as '\0'.
+func isGteRange(rangeEnd []byte) bool {
+	return len(rangeEnd) == 1 && rangeEnd[0] == 0
+}
 
 func applyRange(txnID int64, kv storage.KV, r *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
 	resp := &etcdserverpb.RangeResponse{}
@@ -609,18 +694,4 @@ func applyLeaseCreate(lessor lease.Lessor, req *etcdserverpb.LeaseCreateRequest)
 func applyLeaseRevoke(lessor lease.Lessor, req *etcdserverpb.LeaseRevokeRequest) (*etcdserverpb.LeaseRevokeResponse, error) {
 	err := lessor.Revoke(lease.LeaseID(req.ID))
 	return &etcdserverpb.LeaseRevokeResponse{}, err
-}
-
-func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
-	// TODO(pb)
-}
-
-func (s *etcdStore) cancelPending(id uint64) {
-	// TODO(pb)
-}
-
-// isGteRange determines if the range end is a >= range. This works around grpc
-// sending empty byte strings as nil; >= is encoded in the range end as '\0'.
-func isGteRange(rangeEnd []byte) bool {
-	return len(rangeEnd) == 1 && rangeEnd[0] == 0
 }
