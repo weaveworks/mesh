@@ -30,6 +30,7 @@ func grpcServer(s *etcdStore, options ...wackygrpc.ServerOption) *wackygrpc.Serv
 }
 
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver.
+// The original is unsuitable because it is tightly coupled to persistent storage, an HTTP transport, etc.
 // Implements selected etcd V3 API (gRPC) methods.
 type etcdStore struct {
 	proposalc   chan<- []byte
@@ -42,12 +43,17 @@ type etcdStore struct {
 
 	kv     storage.KV
 	lessor lease.Lessor
+	index  storage.ConsistentIndexGetter
 
 	idgen   <-chan uint64
 	pending map[uint64]chan<- wackyproto.Message
 }
 
 func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, entryc <-chan raftpb.Entry, logger *log.Logger) *etcdStore {
+	backend := newEtcdBackend()
+	lessor := lease.NewLessor(backend)
+	index := &consistentIndex{0}
+	kv := storage.New(backend, lessor, index)
 	s := &etcdStore{
 		proposalc:   proposalc,
 		snapshotc:   snapshotc,
@@ -57,8 +63,9 @@ func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, ent
 		terminatedc: make(chan struct{}),
 		logger:      logger,
 
-		kv:     nil, // TODO(pb)
-		lessor: nil, // TODO(pb)
+		kv:     kv,
+		lessor: lessor,
+		index:  index,
 
 		idgen:   makeIDGen(),
 		pending: map[uint64]chan<- wackyproto.Message{},
@@ -66,27 +73,6 @@ func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, ent
 	go s.loop()
 	return s
 }
-
-func makeIDGen() <-chan uint64 {
-	c := make(chan uint64)
-	go func() {
-		var i uint64 = 1
-		for {
-			c <- i
-			i++
-		}
-	}()
-	return c
-}
-
-const (
-	maxRequestBytes = 8192
-)
-
-var (
-	errStopped = errors.New("etcd store was stopped")
-	errTooBig  = errors.New("request too large to send")
-)
 
 // Range implements gRPC KVServer.
 // Range gets the keys in the range from the store.
@@ -147,6 +133,32 @@ func (s *etcdStore) Hash(ctx wackycontext.Context, req *etcdserverpb.HashRequest
 	return nil, errors.New("not implemented")
 }
 
+// (ಠ_ಠ)
+type consistentIndex struct{ i uint64 }
+
+func (i *consistentIndex) ConsistentIndex() uint64 { return i.i }
+
+func makeIDGen() <-chan uint64 {
+	c := make(chan uint64)
+	go func() {
+		var i uint64 = 1
+		for {
+			c <- i
+			i++
+		}
+	}()
+	return c
+}
+
+const (
+	maxRequestBytes = 8192
+)
+
+var (
+	errStopped = errors.New("etcd store was stopped")
+	errTooBig  = errors.New("request too large to send")
+)
+
 func (s *etcdStore) loop() {
 	defer close(s.terminatedc)
 
@@ -154,12 +166,12 @@ func (s *etcdStore) loop() {
 		select {
 		case snapshot := <-s.snapshotc:
 			if err := s.applySnapshot(snapshot); err != nil {
-				s.logger.Printf("etcd server: apply snapshot: %v", err)
+				s.logger.Printf("etcd store: apply snapshot: %v", err)
 			}
 
 		case entry := <-s.entryc:
 			if err := s.applyCommittedEntry(entry); err != nil {
-				s.logger.Printf("etcd server: apply committed entry: %v", err)
+				s.logger.Printf("etcd store: apply committed entry: %v", err)
 			}
 
 		case f := <-s.actionc:
@@ -178,13 +190,13 @@ func (s *etcdStore) stop() {
 
 func (s *etcdStore) applySnapshot(snapshot raftpb.Snapshot) error {
 	if len(snapshot.Data) == 0 {
-		//s.logger.Printf("etcd server: apply snapshot with empty snapshot; skipping")
+		//s.logger.Printf("etcd store: apply snapshot with empty snapshot; skipping")
 		return nil
 	}
 
-	s.logger.Printf("etcd server: applying snapshot: size %d", len(snapshot.Data))
-	s.logger.Printf("etcd server: applying snapshot: metadata %s", snapshot.Metadata.String())
-	s.logger.Printf("etcd server: applying snapshot: TODO") // TODO(pb)
+	s.logger.Printf("etcd store: applying snapshot: size %d", len(snapshot.Data))
+	s.logger.Printf("etcd store: applying snapshot: metadata %s", snapshot.Metadata.String())
+	s.logger.Printf("etcd store: applying snapshot: TODO") // TODO(pb)
 
 	return nil
 }
@@ -194,28 +206,28 @@ func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
 	case raftpb.EntryNormal:
 		break
 	case raftpb.EntryConfChange:
-		s.logger.Printf("etcd server: ignoring ConfChange entry")
+		s.logger.Printf("etcd store: ignoring ConfChange entry")
 		return nil
 	default:
-		s.logger.Printf("etcd server: got unknown entry type %s", entry.Type)
+		s.logger.Printf("etcd store: got unknown entry type %s", entry.Type)
 		return fmt.Errorf("unknown entry type %d", entry.Type)
 	}
 
 	// entry.Size can be nonzero when len(entry.Data) == 0
 	if len(entry.Data) <= 0 {
-		s.logger.Printf("etcd server: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
+		s.logger.Printf("etcd store: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
 		return nil
 	}
 
 	var req etcdserverpb.InternalRaftRequest
 	if err := req.Unmarshal(entry.Data); err != nil {
-		s.logger.Printf("etcd server: unmarshaling entry data: %v", err)
+		s.logger.Printf("etcd store: unmarshaling entry data: %v", err)
 		return err
 	}
 
 	msg, err := s.applyInternalRaftRequest(req)
 	if err != nil {
-		s.logger.Printf("etcd server: applying internal Raft request %d: %v", req.ID, err)
+		s.logger.Printf("etcd store: applying internal Raft request %d: %v", req.ID, err)
 		s.cancelPending(req.ID)
 		return err
 	}
