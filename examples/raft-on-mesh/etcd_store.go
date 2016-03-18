@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 
+	wackyproto "github.com/coreos/etcd/Godeps/_workspace/src/github.com/gogo/protobuf/proto"
 	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
 	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
 	"github.com/coreos/etcd/etcdserver/etcdserverpb"
@@ -44,30 +44,8 @@ type etcdStore struct {
 
 	revision uint64            // of the store, incremented for each invocation
 	data     map[string]string // current state of the store
+	pending  map[uint64]chan<- interface{}
 }
-
-// This type is a serializable union of all methods.
-// ID is used to correlate responses to the client.
-// Analogous to etcdserverpb.Request.
-type invocation struct {
-	ID  uint64 `json:"id"` // unique to the requesting peer, used to correlate responses
-	Ops []op   `json:"ops"`
-}
-
-type op struct {
-	Method   string    `json:"method"`
-	Key      string    `json:"key,omitempty"`      // for single keys (XOR Range)
-	Range    [2]string `json:"range,omitempty"`    // for ranges of keys (XOR Key)
-	Value    []byte    `json:"value,omitempty"`    // for Put only
-	Revision uint64    `json:"revision,omitempty"` // for Compact only
-}
-
-const (
-	methodGet     = "get"
-	methodPut     = "put"
-	methodDelete  = "delete"
-	methodCompact = "compact"
-)
 
 func (s *etcdStore) loop() {
 	for {
@@ -123,32 +101,89 @@ func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
 		return nil
 	}
 
-	var inv invocation
-	if err := json.Unmarshal(entry.Data, &inv); err != nil {
-		s.logger.Printf("etcd server: unmarshaling entry.Data (%s): %v", entry.Data, err)
-		return err
-	}
-	if err := s.applyInvocation(inv); err != nil {
-		s.logger.Printf("etcd server: applying invocation %d: %v", inv.ID, err)
+	var irr etcdserverpb.InternalRaftRequest
+	if err := irr.Unmarshal(entry.Data); err != nil {
+		s.logger.Printf("etcd server: unmarshaling entry data: %v", err)
 		return err
 	}
 
+	msg, err := s.applyInternalRaftRequest(irr)
+	if err != nil {
+		s.logger.Printf("etcd server: applying internal Raft request %d: %v", irr.ID, err)
+		s.cancelPending(irr.ID)
+		return err
+	}
+
+	s.signalPending(irr.ID, msg)
 	return nil
 }
 
-func (s *etcdStore) applyInvocation(inv invocation) error {
-	// TODO(pb)
-	for _, op := range inv.Ops {
-		switch op.Method {
-		case methodGet:
-		case methodPut:
-		case methodDelete:
-		case methodCompact:
-		default:
-			return fmt.Errorf("unsupported method %q", op.Method)
-		}
+// From public API method, to proposalc.
+func (s *etcdStore) proposeInternalRaftRequest(irr etcdserverpb.InternalRaftRequest) error {
+	data, err := irr.Marshal()
+	if err != nil {
+		return err
 	}
+	// TODO(pb): wire up pending
+	s.proposalc <- data
 	return nil
+}
+
+func (s *etcdStore) cancelInternalRaftRequest(irr etcdserverpb.InternalRaftRequest) error {
+	// TODO(pb): manage pending
+	return nil
+}
+
+// From committed entryc, back to public API method.
+// etcdserver/v3demo_server.go applyV3Result
+func (s *etcdStore) applyInternalRaftRequest(irr etcdserverpb.InternalRaftRequest) (wackyproto.Message, error) {
+	switch {
+	case irr.Range != nil:
+		return s.applyRange(irr.Range)
+	case irr.Put != nil:
+		return s.applyPut(irr.Put)
+	case irr.DeleteRange != nil:
+		return s.applyDeleteRange(irr.DeleteRange)
+	case irr.Txn != nil:
+		return s.applyTxn(irr.Txn)
+	case irr.Compaction != nil:
+		return s.applyCompaction(irr.Compaction)
+	default:
+		return nil, fmt.Errorf("internal Raft request type not implemented")
+	}
+}
+
+func (s *etcdStore) applyRange(req *etcdserverpb.RangeRequest) (wackyproto.Message, error) {
+	// TODO(pb)
+	return nil, nil
+}
+
+func (s *etcdStore) applyPut(req *etcdserverpb.PutRequest) (wackyproto.Message, error) {
+	// TODO(pb)
+	return nil, nil
+}
+
+func (s *etcdStore) applyDeleteRange(req *etcdserverpb.DeleteRangeRequest) (wackyproto.Message, error) {
+	// TODO(pb)
+	return nil, nil
+}
+
+func (s *etcdStore) applyTxn(req *etcdserverpb.TxnRequest) (wackyproto.Message, error) {
+	// TODO(pb)
+	return nil, nil
+}
+
+func (s *etcdStore) applyCompaction(req *etcdserverpb.CompactionRequest) (wackyproto.Message, error) {
+	// TODO(pb)
+	return nil, nil
+}
+
+func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
+	// TODO(pb)
+}
+
+func (s *etcdStore) cancelPending(id uint64) {
+	// TODO(pb)
 }
 
 // Range gets the keys in the range from the store.
