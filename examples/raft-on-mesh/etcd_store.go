@@ -1,189 +1,64 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 
 	wackyproto "github.com/coreos/etcd/Godeps/_workspace/src/github.com/gogo/protobuf/proto"
 	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
 	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
 	"github.com/coreos/etcd/etcdserver/etcdserverpb"
+	"github.com/coreos/etcd/lease"
 	"github.com/coreos/etcd/raft/raftpb"
+	"github.com/coreos/etcd/storage"
+	"github.com/coreos/etcd/storage/storagepb"
 )
 
-func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, entryc <-chan raftpb.Entry, logger *log.Logger) *etcdStore {
-	s := &etcdStore{
-		proposalc: proposalc,
-		snapshotc: snapshotc,
-		entryc:    entryc,
-		actionc:   make(chan func()),
-		quitc:     make(chan struct{}),
-		logger:    logger,
-
-		revision: 1,
-		data:     map[string]string{},
-	}
-	go s.loop()
-	return s
+func grpcServer(s *etcdStore, options ...wackygrpc.ServerOption) *wackygrpc.Server {
+	srv := wackygrpc.NewServer(options...)
+	etcdserverpb.RegisterKVServer(srv, s)
+	//etcdserverpb.RegisterAuthServer(srv, makeAuthServer(s))
+	//etcdserverpb.RegisterClusterServer(srv, makeClusterServer(s))
+	//etcdserverpb.RegisterKVServer(srv, makeKVServer(s))
+	//etcdserverpb.RegisterLeaseServer(srv, makeLeaseServer(s))
+	//etcdserverpb.RegisterMaintenanceServer(srv, makeMaintenanceServer(s))
+	//etcdserverpb.RegisterWatchServer(srv, makeWatchServer(s))
+	return srv
 }
 
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver.
-//
-// Almost all methods need to go through the Raft log, i.e. they should only
-// return to the client once they've been committed. So, those methods create
-// serializable requests, which are registered and then proposed. Committed
-// proposals trigger their registered channel with a response.
+// Implements selected etcd V3 API (gRPC) methods.
 type etcdStore struct {
-	proposalc chan<- []byte
-	snapshotc <-chan raftpb.Snapshot
-	entryc    <-chan raftpb.Entry
-	actionc   chan func()
-	quitc     chan struct{}
-	logger    *log.Logger
+	proposalc   chan<- []byte
+	snapshotc   <-chan raftpb.Snapshot
+	entryc      <-chan raftpb.Entry
+	actionc     chan func()
+	quitc       chan struct{}
+	terminatedc chan struct{}
+	logger      *log.Logger
 
-	revision uint64            // of the store, incremented for each invocation
-	data     map[string]string // current state of the store
-	pending  map[uint64]chan<- interface{}
+	kv     storage.KV
+	lessor lease.Lessor
 }
 
-func (s *etcdStore) loop() {
-	for {
-		select {
-		case snapshot := <-s.snapshotc:
-			if err := s.applySnapshot(snapshot); err != nil {
-				s.logger.Printf("etcd server: apply snapshot: %v", err)
-			}
+func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, entryc <-chan raftpb.Entry, logger *log.Logger) *etcdStore {
+	s := &etcdStore{
+		proposalc:   proposalc,
+		snapshotc:   snapshotc,
+		entryc:      entryc,
+		actionc:     make(chan func()),
+		quitc:       make(chan struct{}),
+		terminatedc: make(chan struct{}),
+		logger:      logger,
 
-		case entry := <-s.entryc:
-			if err := s.applyCommittedEntry(entry); err != nil {
-				s.logger.Printf("etcd server: apply committed entry: %v", err)
-			}
-
-		case f := <-s.actionc:
-			f()
-
-		case <-s.quitc:
-			return
-		}
+		kv:     nil, // TODO(pb)
+		lessor: nil, // TODO(pb)
 	}
-}
-
-func (s *etcdStore) applySnapshot(snapshot raftpb.Snapshot) error {
-	if len(snapshot.Data) == 0 {
-		//s.logger.Printf("etcd server: apply snapshot with empty snapshot; skipping")
-		return nil
-	}
-
-	s.logger.Printf("etcd server: applying snapshot: size %d", len(snapshot.Data))
-	s.logger.Printf("etcd server: applying snapshot: metadata %s", snapshot.Metadata.String())
-	s.logger.Printf("etcd server: applying snapshot: TODO") // TODO(pb)
-
-	return nil
-}
-
-func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
-	switch entry.Type {
-	case raftpb.EntryNormal:
-		break
-	case raftpb.EntryConfChange:
-		s.logger.Printf("etcd server: ignoring ConfChange entry")
-		return nil
-
-	default:
-		s.logger.Printf("etcd server: got unknown entry type %s", entry.Type)
-		return fmt.Errorf("unknown entry type %d", entry.Type)
-	}
-
-	// entry.Size can be nonzero when len(entry.Data) == 0
-	if len(entry.Data) <= 0 {
-		s.logger.Printf("etcd server: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
-		return nil
-	}
-
-	var irr etcdserverpb.InternalRaftRequest
-	if err := irr.Unmarshal(entry.Data); err != nil {
-		s.logger.Printf("etcd server: unmarshaling entry data: %v", err)
-		return err
-	}
-
-	msg, err := s.applyInternalRaftRequest(irr)
-	if err != nil {
-		s.logger.Printf("etcd server: applying internal Raft request %d: %v", irr.ID, err)
-		s.cancelPending(irr.ID)
-		return err
-	}
-
-	s.signalPending(irr.ID, msg)
-	return nil
-}
-
-// From public API method, to proposalc.
-func (s *etcdStore) proposeInternalRaftRequest(irr etcdserverpb.InternalRaftRequest) error {
-	data, err := irr.Marshal()
-	if err != nil {
-		return err
-	}
-	// TODO(pb): wire up pending
-	s.proposalc <- data
-	return nil
-}
-
-func (s *etcdStore) cancelInternalRaftRequest(irr etcdserverpb.InternalRaftRequest) error {
-	// TODO(pb): manage pending
-	return nil
-}
-
-// From committed entryc, back to public API method.
-// etcdserver/v3demo_server.go applyV3Result
-func (s *etcdStore) applyInternalRaftRequest(irr etcdserverpb.InternalRaftRequest) (wackyproto.Message, error) {
-	switch {
-	case irr.Range != nil:
-		return s.applyRange(irr.Range)
-	case irr.Put != nil:
-		return s.applyPut(irr.Put)
-	case irr.DeleteRange != nil:
-		return s.applyDeleteRange(irr.DeleteRange)
-	case irr.Txn != nil:
-		return s.applyTxn(irr.Txn)
-	case irr.Compaction != nil:
-		return s.applyCompaction(irr.Compaction)
-	default:
-		return nil, fmt.Errorf("internal Raft request type not implemented")
-	}
-}
-
-func (s *etcdStore) applyRange(req *etcdserverpb.RangeRequest) (wackyproto.Message, error) {
-	// TODO(pb)
-	return nil, nil
-}
-
-func (s *etcdStore) applyPut(req *etcdserverpb.PutRequest) (wackyproto.Message, error) {
-	// TODO(pb)
-	return nil, nil
-}
-
-func (s *etcdStore) applyDeleteRange(req *etcdserverpb.DeleteRangeRequest) (wackyproto.Message, error) {
-	// TODO(pb)
-	return nil, nil
-}
-
-func (s *etcdStore) applyTxn(req *etcdserverpb.TxnRequest) (wackyproto.Message, error) {
-	// TODO(pb)
-	return nil, nil
-}
-
-func (s *etcdStore) applyCompaction(req *etcdserverpb.CompactionRequest) (wackyproto.Message, error) {
-	// TODO(pb)
-	return nil, nil
-}
-
-func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
-	// TODO(pb)
-}
-
-func (s *etcdStore) cancelPending(id uint64) {
-	// TODO(pb)
+	go s.loop()
+	return s
 }
 
 // Range gets the keys in the range from the store.
@@ -226,14 +101,526 @@ func (s *etcdStore) Hash(ctx wackycontext.Context, req *etcdserverpb.HashRequest
 	return nil, errors.New("not implemented")
 }
 
-func grpcServer(s *etcdStore, options ...wackygrpc.ServerOption) *wackygrpc.Server {
-	srv := wackygrpc.NewServer(options...)
-	etcdserverpb.RegisterKVServer(srv, s)
-	//etcdserverpb.RegisterAuthServer(srv, makeAuthServer(s))
-	//etcdserverpb.RegisterClusterServer(srv, makeClusterServer(s))
-	//etcdserverpb.RegisterKVServer(srv, makeKVServer(s))
-	//etcdserverpb.RegisterLeaseServer(srv, makeLeaseServer(s))
-	//etcdserverpb.RegisterMaintenanceServer(srv, makeMaintenanceServer(s))
-	//etcdserverpb.RegisterWatchServer(srv, makeWatchServer(s))
-	return srv
+func (s *etcdStore) loop() {
+	defer close(s.terminatedc)
+
+	for {
+		select {
+		case snapshot := <-s.snapshotc:
+			if err := s.applySnapshot(snapshot); err != nil {
+				s.logger.Printf("etcd server: apply snapshot: %v", err)
+			}
+
+		case entry := <-s.entryc:
+			if err := s.applyCommittedEntry(entry); err != nil {
+				s.logger.Printf("etcd server: apply committed entry: %v", err)
+			}
+
+		case f := <-s.actionc:
+			f()
+
+		case <-s.quitc:
+			return
+		}
+	}
+}
+
+func (s *etcdStore) stop() {
+	close(s.quitc)
+	<-s.terminatedc
+}
+
+func (s *etcdStore) applySnapshot(snapshot raftpb.Snapshot) error {
+	if len(snapshot.Data) == 0 {
+		//s.logger.Printf("etcd server: apply snapshot with empty snapshot; skipping")
+		return nil
+	}
+
+	s.logger.Printf("etcd server: applying snapshot: size %d", len(snapshot.Data))
+	s.logger.Printf("etcd server: applying snapshot: metadata %s", snapshot.Metadata.String())
+	s.logger.Printf("etcd server: applying snapshot: TODO") // TODO(pb)
+
+	return nil
+}
+
+func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
+	switch entry.Type {
+	case raftpb.EntryNormal:
+		break
+	case raftpb.EntryConfChange:
+		s.logger.Printf("etcd server: ignoring ConfChange entry")
+		return nil
+	default:
+		s.logger.Printf("etcd server: got unknown entry type %s", entry.Type)
+		return fmt.Errorf("unknown entry type %d", entry.Type)
+	}
+
+	// entry.Size can be nonzero when len(entry.Data) == 0
+	if len(entry.Data) <= 0 {
+		s.logger.Printf("etcd server: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
+		return nil
+	}
+
+	var req etcdserverpb.InternalRaftRequest
+	if err := req.Unmarshal(entry.Data); err != nil {
+		s.logger.Printf("etcd server: unmarshaling entry data: %v", err)
+		return err
+	}
+
+	msg, err := s.applyInternalRaftRequest(req)
+	if err != nil {
+		s.logger.Printf("etcd server: applying internal Raft request %d: %v", req.ID, err)
+		s.cancelPending(req.ID)
+		return err
+	}
+
+	s.signalPending(req.ID, msg)
+
+	return nil
+}
+
+// From public API method to proposalc.
+func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) error {
+	data, err := req.Marshal()
+	if err != nil {
+		return err
+	}
+	// TODO(pb): wire up pending
+	s.proposalc <- data
+	return nil
+}
+
+func (s *etcdStore) cancelInternalRaftRequest(req etcdserverpb.InternalRaftRequest) error {
+	// TODO(pb): manage pending
+	return nil
+}
+
+// From committed entryc, back to public API method.
+// etcdserver/v3demo_server.go applyV3Result
+func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (wackyproto.Message, error) {
+	switch {
+	case req.Range != nil:
+		return applyRange(noTxn, s.kv, req.Range)
+	case req.Put != nil:
+		return applyPut(noTxn, s.kv, s.lessor, req.Put)
+	case req.DeleteRange != nil:
+		return applyDeleteRange(noTxn, s.kv, req.DeleteRange)
+	case req.Txn != nil:
+		return applyTransaction(s.kv, s.lessor, req.Txn)
+	case req.Compaction != nil:
+		return applyCompaction(s.kv, req.Compaction)
+	case req.LeaseCreate != nil:
+		return applyLeaseCreate(s.lessor, req.LeaseCreate)
+	case req.LeaseRevoke != nil:
+		return applyLeaseRevoke(s.lessor, req.LeaseRevoke)
+	default:
+		return nil, fmt.Errorf("internal Raft request type not implemented")
+	}
+}
+
+// Sentinel value to indicate the operation is not part of a transaction.
+const noTxn = -1
+
+func applyRange(txnID int64, kv storage.KV, r *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
+	resp := &etcdserverpb.RangeResponse{}
+	resp.Header = &etcdserverpb.ResponseHeader{}
+
+	var (
+		kvs []storagepb.KeyValue
+		rev int64
+		err error
+	)
+
+	if isGteRange(r.RangeEnd) {
+		r.RangeEnd = []byte{}
+	}
+
+	limit := r.Limit
+	if r.SortOrder != etcdserverpb.RangeRequest_NONE {
+		// fetch everything; sort and truncate afterwards
+		limit = 0
+	}
+	if limit > 0 {
+		// fetch one extra for 'more' flag
+		limit = limit + 1
+	}
+
+	if txnID != noTxn {
+		kvs, rev, err = kv.TxnRange(txnID, r.Key, r.RangeEnd, limit, r.Revision)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		kvs, rev, err = kv.Range(r.Key, r.RangeEnd, limit, r.Revision)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if r.SortOrder != etcdserverpb.RangeRequest_NONE {
+		var sorter sort.Interface
+		switch {
+		case r.SortTarget == etcdserverpb.RangeRequest_KEY:
+			sorter = &kvSortByKey{&kvSort{kvs}}
+		case r.SortTarget == etcdserverpb.RangeRequest_VERSION:
+			sorter = &kvSortByVersion{&kvSort{kvs}}
+		case r.SortTarget == etcdserverpb.RangeRequest_CREATE:
+			sorter = &kvSortByCreate{&kvSort{kvs}}
+		case r.SortTarget == etcdserverpb.RangeRequest_MOD:
+			sorter = &kvSortByMod{&kvSort{kvs}}
+		case r.SortTarget == etcdserverpb.RangeRequest_VALUE:
+			sorter = &kvSortByValue{&kvSort{kvs}}
+		}
+		switch {
+		case r.SortOrder == etcdserverpb.RangeRequest_ASCEND:
+			sort.Sort(sorter)
+		case r.SortOrder == etcdserverpb.RangeRequest_DESCEND:
+			sort.Sort(sort.Reverse(sorter))
+		}
+	}
+
+	if r.Limit > 0 && len(kvs) > int(r.Limit) {
+		kvs = kvs[:r.Limit]
+		resp.More = true
+	}
+
+	resp.Header.Revision = rev
+	for i := range kvs {
+		resp.Kvs = append(resp.Kvs, &kvs[i])
+	}
+	return resp, nil
+}
+
+type kvSort struct{ kvs []storagepb.KeyValue }
+
+func (s *kvSort) Swap(i, j int) {
+	t := s.kvs[i]
+	s.kvs[i] = s.kvs[j]
+	s.kvs[j] = t
+}
+func (s *kvSort) Len() int { return len(s.kvs) }
+
+type kvSortByKey struct{ *kvSort }
+
+func (s *kvSortByKey) Less(i, j int) bool {
+	return bytes.Compare(s.kvs[i].Key, s.kvs[j].Key) < 0
+}
+
+type kvSortByVersion struct{ *kvSort }
+
+func (s *kvSortByVersion) Less(i, j int) bool {
+	return (s.kvs[i].Version - s.kvs[j].Version) < 0
+}
+
+type kvSortByCreate struct{ *kvSort }
+
+func (s *kvSortByCreate) Less(i, j int) bool {
+	return (s.kvs[i].CreateRevision - s.kvs[j].CreateRevision) < 0
+}
+
+type kvSortByMod struct{ *kvSort }
+
+func (s *kvSortByMod) Less(i, j int) bool {
+	return (s.kvs[i].ModRevision - s.kvs[j].ModRevision) < 0
+}
+
+type kvSortByValue struct{ *kvSort }
+
+func (s *kvSortByValue) Less(i, j int) bool {
+	return bytes.Compare(s.kvs[i].Value, s.kvs[j].Value) < 0
+}
+
+func applyPut(txnID int64, kv storage.KV, lessor lease.Lessor, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
+	resp := &etcdserverpb.PutResponse{}
+	resp.Header = &etcdserverpb.ResponseHeader{}
+	var (
+		rev int64
+		err error
+	)
+	if txnID != noTxn {
+		rev, err = kv.TxnPut(txnID, req.Key, req.Value, lease.LeaseID(req.Lease))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		leaseID := lease.LeaseID(req.Lease)
+		if leaseID != lease.NoLease {
+			if l := lessor.Lookup(leaseID); l == nil {
+				return nil, lease.ErrLeaseNotFound
+			}
+		}
+		rev = kv.Put(req.Key, req.Value, leaseID)
+	}
+	resp.Header.Revision = rev
+	return resp, nil
+}
+
+func applyDeleteRange(txnID int64, kv storage.KV, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
+	resp := &etcdserverpb.DeleteRangeResponse{}
+	resp.Header = &etcdserverpb.ResponseHeader{}
+
+	var (
+		n   int64
+		rev int64
+		err error
+	)
+
+	if isGteRange(req.RangeEnd) {
+		req.RangeEnd = []byte{}
+	}
+
+	if txnID != noTxn {
+		n, rev, err = kv.TxnDeleteRange(txnID, req.Key, req.RangeEnd)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		n, rev = kv.DeleteRange(req.Key, req.RangeEnd)
+	}
+
+	resp.Deleted = n
+	resp.Header.Revision = rev
+	return resp, nil
+}
+
+func applyTransaction(kv storage.KV, lessor lease.Lessor, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
+	var revision int64
+
+	ok := true
+	for _, c := range req.Compare {
+		if revision, ok = applyCompare(kv, c); !ok {
+			break
+		}
+	}
+
+	var reqs []*etcdserverpb.RequestUnion
+	if ok {
+		reqs = req.Success
+	} else {
+		reqs = req.Failure
+	}
+
+	if err := checkRequestLeases(lessor, reqs); err != nil {
+		return nil, err
+	}
+	if err := checkRequestRange(kv, reqs); err != nil {
+		return nil, err
+	}
+
+	// When executing the operations of txn, we need to hold the txn lock.
+	// So the reader will not see any intermediate results.
+	txnID := kv.TxnBegin()
+	defer func() {
+		err := kv.TxnEnd(txnID)
+		if err != nil {
+			panic(fmt.Sprint("unexpected error when closing txn", txnID))
+		}
+	}()
+
+	resps := make([]*etcdserverpb.ResponseUnion, len(reqs))
+	for i := range reqs {
+		resps[i] = applyUnion(txnID, kv, reqs[i])
+	}
+
+	if len(resps) != 0 {
+		revision++
+	}
+
+	txnResp := &etcdserverpb.TxnResponse{}
+	txnResp.Header = &etcdserverpb.ResponseHeader{}
+	txnResp.Header.Revision = revision
+	txnResp.Responses = resps
+	txnResp.Succeeded = ok
+	return txnResp, nil
+}
+
+func checkRequestLeases(le lease.Lessor, reqs []*etcdserverpb.RequestUnion) error {
+	for _, requ := range reqs {
+		tv, ok := requ.Request.(*etcdserverpb.RequestUnion_RequestPut)
+		if !ok {
+			continue
+		}
+		preq := tv.RequestPut
+		if preq == nil || lease.LeaseID(preq.Lease) == lease.NoLease {
+			continue
+		}
+		if l := le.Lookup(lease.LeaseID(preq.Lease)); l == nil {
+			return lease.ErrLeaseNotFound
+		}
+	}
+	return nil
+}
+
+func checkRequestRange(kv storage.KV, reqs []*etcdserverpb.RequestUnion) error {
+	for _, requ := range reqs {
+		tv, ok := requ.Request.(*etcdserverpb.RequestUnion_RequestRange)
+		if !ok {
+			continue
+		}
+		greq := tv.RequestRange
+		if greq == nil || greq.Revision == 0 {
+			continue
+		}
+
+		if greq.Revision > kv.Rev() {
+			return storage.ErrFutureRev
+		}
+		if greq.Revision < kv.FirstRev() {
+			return storage.ErrCompacted
+		}
+	}
+	return nil
+}
+
+func applyUnion(txnID int64, kv storage.KV, union *etcdserverpb.RequestUnion) *etcdserverpb.ResponseUnion {
+	switch tv := union.Request.(type) {
+	case *etcdserverpb.RequestUnion_RequestRange:
+		if tv.RequestRange != nil {
+			resp, err := applyRange(txnID, kv, tv.RequestRange)
+			if err != nil {
+				panic("unexpected error during txn")
+			}
+			return &etcdserverpb.ResponseUnion{Response: &etcdserverpb.ResponseUnion_ResponseRange{ResponseRange: resp}}
+		}
+	case *etcdserverpb.RequestUnion_RequestPut:
+		if tv.RequestPut != nil {
+			resp, err := applyPut(txnID, kv, nil, tv.RequestPut)
+			if err != nil {
+				panic("unexpected error during txn")
+			}
+			return &etcdserverpb.ResponseUnion{Response: &etcdserverpb.ResponseUnion_ResponsePut{ResponsePut: resp}}
+		}
+	case *etcdserverpb.RequestUnion_RequestDeleteRange:
+		if tv.RequestDeleteRange != nil {
+			resp, err := applyDeleteRange(txnID, kv, tv.RequestDeleteRange)
+			if err != nil {
+				panic("unexpected error during txn")
+			}
+			return &etcdserverpb.ResponseUnion{Response: &etcdserverpb.ResponseUnion_ResponseDeleteRange{ResponseDeleteRange: resp}}
+		}
+	default:
+		// empty union
+		return nil
+	}
+	return nil
+}
+
+// applyCompare applies the compare request.
+// It returns the revision at which the comparison happens. If the comparison
+// succeeds, the it returns true. Otherwise it returns false.
+func applyCompare(kv storage.KV, c *etcdserverpb.Compare) (int64, bool) {
+	ckvs, rev, err := kv.Range(c.Key, nil, 1, 0)
+	if err != nil {
+		if err == storage.ErrTxnIDMismatch {
+			panic("unexpected txn ID mismatch error")
+		}
+		return rev, false
+	}
+	var ckv storagepb.KeyValue
+	if len(ckvs) != 0 {
+		ckv = ckvs[0]
+	} else {
+		// Use the zero value of ckv normally. However...
+		if c.Target == etcdserverpb.Compare_VALUE {
+			// Always fail if we're comparing a value on a key that doesn't exist.
+			// We can treat non-existence as the empty set explicitly, such that
+			// even a key with a value of length 0 bytes is still a real key
+			// that was written that way
+			return rev, false
+		}
+	}
+
+	// -1 is less, 0 is equal, 1 is greater
+	var result int
+	switch c.Target {
+	case etcdserverpb.Compare_VALUE:
+		tv, _ := c.TargetUnion.(*etcdserverpb.Compare_Value)
+		if tv != nil {
+			result = bytes.Compare(ckv.Value, tv.Value)
+		}
+	case etcdserverpb.Compare_CREATE:
+		tv, _ := c.TargetUnion.(*etcdserverpb.Compare_CreateRevision)
+		if tv != nil {
+			result = compareInt64(ckv.CreateRevision, tv.CreateRevision)
+		}
+
+	case etcdserverpb.Compare_MOD:
+		tv, _ := c.TargetUnion.(*etcdserverpb.Compare_ModRevision)
+		if tv != nil {
+			result = compareInt64(ckv.ModRevision, tv.ModRevision)
+		}
+	case etcdserverpb.Compare_VERSION:
+		tv, _ := c.TargetUnion.(*etcdserverpb.Compare_Version)
+		if tv != nil {
+			result = compareInt64(ckv.Version, tv.Version)
+		}
+	}
+
+	switch c.Result {
+	case etcdserverpb.Compare_EQUAL:
+		if result != 0 {
+			return rev, false
+		}
+	case etcdserverpb.Compare_GREATER:
+		if result != 1 {
+			return rev, false
+		}
+	case etcdserverpb.Compare_LESS:
+		if result != -1 {
+			return rev, false
+		}
+	}
+	return rev, true
+}
+
+func compareInt64(a, b int64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func applyCompaction(kv storage.KV, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
+	resp := &etcdserverpb.CompactionResponse{}
+	resp.Header = &etcdserverpb.ResponseHeader{}
+	err := kv.Compact(req.Revision)
+	if err != nil {
+		return nil, err
+	}
+	// get the current revision. which key to get is not important.
+	_, resp.Header.Revision, _ = kv.Range([]byte("compaction"), nil, 1, 0)
+	return resp, err
+}
+
+func applyLeaseCreate(lessor lease.Lessor, req *etcdserverpb.LeaseCreateRequest) (*etcdserverpb.LeaseCreateResponse, error) {
+	l, err := lessor.Grant(lease.LeaseID(req.ID), req.TTL)
+	resp := &etcdserverpb.LeaseCreateResponse{}
+	if err == nil {
+		resp.ID = int64(l.ID)
+		resp.TTL = l.TTL
+	}
+	return resp, err
+}
+
+func applyLeaseRevoke(lessor lease.Lessor, req *etcdserverpb.LeaseRevokeRequest) (*etcdserverpb.LeaseRevokeResponse, error) {
+	err := lessor.Revoke(lease.LeaseID(req.ID))
+	return &etcdserverpb.LeaseRevokeResponse{}, err
+}
+
+func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
+	// TODO(pb)
+}
+
+func (s *etcdStore) cancelPending(id uint64) {
+	// TODO(pb)
+}
+
+// isGteRange determines if the range end is a >= range. This works around grpc
+// sending empty byte strings as nil; >= is encoded in the range end as '\0'.
+func isGteRange(rangeEnd []byte) bool {
+	return len(rangeEnd) == 1 && rangeEnd[0] == 0
 }
