@@ -40,7 +40,7 @@ func NewStatus(router *Router) *Status {
 		UnicastRoutes:      makeUnicastRouteStatusSlice(router.Routes),
 		BroadcastRoutes:    makeBroadcastRouteStatusSlice(router.Routes),
 		Connections:        makeLocalConnectionStatusSlice(router.ConnectionMaker),
-		Targets:            router.ConnectionMaker.Targets(),
+		Targets:            router.ConnectionMaker.Targets(false),
 		OverlayDiagnostics: router.Overlay.Diagnostics(),
 		TrustedSubnets:     makeTrustedSubnetsSlice(router.TrustedSubnets),
 	}
