@@ -135,14 +135,20 @@ func (cm *connectionMaker) ForgetConnections(peers []string) {
 	}
 }
 
-// Targets takes a snapshot of the active targets (direct peers).
+// Targets takes a snapshot of the targets (direct peers),
+// either just the ones we are still trying, or all of them.
 // Note these are the same things that InitiateConnections and ForgetConnections talks about,
 // but a method to retrieve 'Connections' would obviously return the current connections.
-func (cm *connectionMaker) Targets() []string {
+func (cm *connectionMaker) Targets(activeOnly bool) []string {
 	resultChan := make(chan []string, 0)
 	cm.actionChan <- func() bool {
 		var slice []string
 		for peer := range cm.directPeers {
+			if activeOnly {
+				if target, ok := cm.targets[peer]; ok && target.tryAfter.IsZero() {
+					continue
+				}
+			}
 			slice = append(slice, peer)
 		}
 		resultChan <- slice
