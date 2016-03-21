@@ -144,6 +144,25 @@ func main() {
 	transport := newPacketTransport(peer, translateVia(router), incomingc, outgoingc, unreachablec, logger)
 	defer transport.stop()
 
+	// Create the API server. store.stop must go on the defer stack before
+	// ctrl.stop so that the ctrl stops first. Otherwise, ctrl can deadlock
+	// processing the last tick.
+	var listenAndServe func() error
+	switch *storage {
+	case "simple":
+		logger.Printf("HTTP simple store starting (%s)", *apiListen)
+		store := newSimpleStore(snapshotc, entryc, proposalc, logger)
+		http.Handle("/", makeHandler(router, peer, store, logger))
+		listenAndServe = func() error { return http.ListenAndServe(*apiListen, nil) }
+	case "etcd":
+		logger.Printf("etcd V3 (gRPC) engine starting (%s)", *apiListen)
+		store := newEtcdStore(proposalc, snapshotc, entryc, logger)
+		defer store.stop()
+		listenAndServe = func() error { return grpcListenAndServe(*apiListen, grpcServer(store)) }
+	default:
+		listenAndServe = func() error { return fmt.Errorf("invalid -storage %q", *storage) }
+	}
+
 	// Create the controller, which drives the Raft node internally.
 	ctrl := newCtrl(self, others, *n, incomingc, outgoingc, unreachablec, confchangec, snapshotc, entryc, proposalc, removedc, logger)
 	defer ctrl.stop()
@@ -153,19 +172,7 @@ func main() {
 
 	errc := make(chan error)
 	go func() {
-		switch *storage {
-		case "simple":
-			logger.Printf("HTTP simple store starting (%s)", *apiListen)
-			store := newSimpleStore(snapshotc, entryc, proposalc, logger)
-			http.Handle("/", makeHandler(router, peer, store, logger))
-			errc <- http.ListenAndServe(*apiListen, nil)
-		case "etcd":
-			logger.Printf("etcd V3 (gRPC) engine starting (%s)", *apiListen)
-			store := newEtcdStore(proposalc, snapshotc, entryc, logger)
-			errc <- grpcListenAndServe(*apiListen, grpcServer(store))
-		default:
-			errc <- fmt.Errorf("invalid -storage %q", *storage)
-		}
+		errc <- listenAndServe()
 	}()
 	go func() {
 		c := make(chan os.Signal)
