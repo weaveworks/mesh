@@ -71,7 +71,7 @@ func PeerNameFromString(nameStr string) (PeerName, error) {
 	case match("::%2x", &f):
 	case match("%2x::", &a):
 	default:
-		return UnknownPeerName, fmt.Errorf("invalid peer name format")
+		return UnknownPeerName, fmt.Errorf("invalid peer name format: %q", nameStr)
 	}
 
 	return PeerName(a<<40 | b<<32 | c<<24 | d<<16 | e<<8 | f), nil
