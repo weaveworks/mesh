@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net"
+	"os"
 	"sort"
 
 	wackyproto "github.com/coreos/etcd/Godeps/_workspace/src/github.com/gogo/protobuf/proto"
@@ -14,6 +17,7 @@ import (
 	"github.com/coreos/etcd/lease"
 	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/coreos/etcd/storage"
+	"github.com/coreos/etcd/storage/backend"
 	"github.com/coreos/etcd/storage/storagepb"
 )
 
@@ -29,6 +33,15 @@ func grpcServer(s *etcdStore, options ...wackygrpc.ServerOption) *wackygrpc.Serv
 	return srv
 }
 
+// Like http.ListenAndServe. Blocks forever.
+func grpcListenAndServe(addr string, server *wackygrpc.Server) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return server.Serve(ln)
+}
+
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver.
 // The original is unsuitable because it is tightly coupled to persistent storage, an HTTP transport, etc.
 // Implements selected etcd V3 API (gRPC) methods.
@@ -41,6 +54,7 @@ type etcdStore struct {
 	terminatedc chan struct{}
 	logger      *log.Logger
 
+	dbPath string // remove on exit
 	kv     storage.KV
 	lessor lease.Lessor
 	index  storage.ConsistentIndexGetter
@@ -50,10 +64,22 @@ type etcdStore struct {
 }
 
 func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, entryc <-chan raftpb.Entry, logger *log.Logger) *etcdStore {
-	backend := newEtcdBackend()
-	lessor := lease.NewLessor(backend)
+	// It would be much better if we could have a proper in-memory backend. Alas:
+	// backend.Backend is tightly coupled to bolt.DB, and both are tightly coupled
+	// to os.Open et. al. So we'd need to fork both Bolt and backend. A task for
+	// another day.
+	f, err := ioutil.TempFile(os.TempDir(), "mesh_etcd_backend_")
+	if err != nil {
+		panic(err)
+	}
+	dbPath := f.Name()
+	f.Close()
+
+	b := backend.NewDefaultBackend(dbPath)
+	lessor := lease.NewLessor(b)
 	index := &consistentIndex{0}
-	kv := storage.New(backend, lessor, index)
+	kv := storage.New(b, lessor, index)
+
 	s := &etcdStore{
 		proposalc:   proposalc,
 		snapshotc:   snapshotc,
@@ -63,6 +89,7 @@ func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, ent
 		terminatedc: make(chan struct{}),
 		logger:      logger,
 
+		dbPath: dbPath,
 		kv:     kv,
 		lessor: lessor,
 		index:  index,
@@ -98,7 +125,20 @@ func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeReque
 // A put request increases the revision of the store,
 // and generates one event in the event history.
 func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
-	return nil, errors.New("not implemented")
+	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Put: req}
+	c, err := s.proposeInternalRaftRequest(ireq)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		s.cancelInternalRaftRequest(ireq)
+		return nil, ctx.Err()
+	case msg := <-c:
+		return msg.(*etcdserverpb.PutResponse), nil
+	case <-s.quitc:
+		return nil, errStopped
+	}
 }
 
 // Delete implements gRPC KVServer.
@@ -106,7 +146,20 @@ func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) 
 // A delete request increase the revision of the store,
 // and generates one event in the event history.
 func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
-	return nil, errors.New("not implemented")
+	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, DeleteRange: req}
+	c, err := s.proposeInternalRaftRequest(ireq)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		s.cancelInternalRaftRequest(ireq)
+		return nil, ctx.Err()
+	case msg := <-c:
+		return msg.(*etcdserverpb.DeleteRangeResponse), nil
+	case <-s.quitc:
+		return nil, errStopped
+	}
 }
 
 // Txn implements gRPC KVServer.
@@ -115,14 +168,40 @@ func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.Dele
 // and generates events with the same revision in the event history.
 // It is not allowed to modify the same key several times within one txn.
 func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
-	return nil, errors.New("not implemented")
+	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Txn: req}
+	c, err := s.proposeInternalRaftRequest(ireq)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		s.cancelInternalRaftRequest(ireq)
+		return nil, ctx.Err()
+	case msg := <-c:
+		return msg.(*etcdserverpb.TxnResponse), nil
+	case <-s.quitc:
+		return nil, errStopped
+	}
 }
 
 // Compact implements gRPC KVServer.
 // Compact compacts the event history in s. User should compact the
 // event history periodically, or it will grow infinitely.
 func (s *etcdStore) Compact(ctx wackycontext.Context, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
-	return nil, errors.New("not implemented")
+	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Compaction: req}
+	c, err := s.proposeInternalRaftRequest(ireq)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		s.cancelInternalRaftRequest(ireq)
+		return nil, ctx.Err()
+	case msg := <-c:
+		return msg.(*etcdserverpb.CompactionResponse), nil
+	case <-s.quitc:
+		return nil, errStopped
+	}
 }
 
 // Hash implements gRPC KVServer.
@@ -161,6 +240,7 @@ var (
 
 func (s *etcdStore) loop() {
 	defer close(s.terminatedc)
+	defer s.removeDB()
 
 	for {
 		select {
@@ -307,6 +387,12 @@ func (s *etcdStore) cancelPending(id uint64) {
 		return
 	}
 	delete(s.pending, id)
+}
+
+func (s *etcdStore) removeDB() {
+	if err := os.RemoveAll(s.dbPath); err != nil {
+		s.logger.Printf("etcd store: error removing tmp DB %s: %v", s.dbPath, err)
+	}
 }
 
 // Sentinel value to indicate the operation is not part of a transaction.

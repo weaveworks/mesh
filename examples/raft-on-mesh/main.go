@@ -24,14 +24,15 @@ import (
 func main() {
 	peers := &stringset{}
 	var (
-		httpListen = flag.String("http", ":8080", "HTTP listen address")
+		apiListen  = flag.String("api", ":8080", "API listen address")
 		meshListen = flag.String("mesh", net.JoinHostPort("0.0.0.0", strconv.Itoa(mesh.Port)), "mesh listen address")
 		hwaddr     = flag.String("hwaddr", mustHardwareAddr(), "MAC address, i.e. mesh peer name")
 		nickname   = flag.String("nickname", mustHostname(), "peer nickname")
 		password   = flag.String("password", "", "password (optional)")
 		channel    = flag.String("channel", "default", "gossip channel name")
-		n          = flag.Int("n", 3, "number of peers expected (lower bound)")
+		storage    = flag.String("storage", "simple", "storage engine: simple, etcd")
 		quicktest  = flag.Int("quicktest", 0, "set to integer 1-9 to enable quick test setup of node")
+		n          = flag.Int("n", 3, "number of peers expected (lower bound)")
 	)
 	flag.Var(peers, "peer", "initial peer (may be repeated)")
 	flag.Parse()
@@ -41,7 +42,7 @@ func main() {
 	if *quicktest > 0 {
 		*hwaddr = fmt.Sprintf("00:00:00:00:00:0%d", *quicktest)
 		*meshListen = fmt.Sprintf("0.0.0.0:600%d", *quicktest)
-		*httpListen = fmt.Sprintf("0.0.0.0:800%d", *quicktest)
+		*apiListen = fmt.Sprintf("0.0.0.0:800%d", *quicktest)
 		for i := 1; i <= 9; i++ {
 			peers.Set(fmt.Sprintf("127.0.0.1:600%d", i))
 		}
@@ -150,29 +151,36 @@ func main() {
 	// Create the demuxer, splitting all committed entries to ConfChange and Normal entries.
 	go demux(entryc, confentryc, normalentryc)
 
-	// Create the HTTP simple store. For now.
-	simpleStore := newSimpleStore(snapshotc, entryc, proposalc, logger)
-
-	errs := make(chan error, 3)
+	errc := make(chan error)
+	go func() {
+		switch *storage {
+		case "simple":
+			logger.Printf("HTTP simple store starting (%s)", *apiListen)
+			store := newSimpleStore(snapshotc, entryc, proposalc, logger)
+			http.Handle("/", makeHandler(router, peer, store, logger))
+			errc <- http.ListenAndServe(*apiListen, nil)
+		case "etcd":
+			logger.Printf("etcd V3 (gRPC) engine starting (%s)", *apiListen)
+			store := newEtcdStore(proposalc, snapshotc, entryc, logger)
+			errc <- grpcListenAndServe(*apiListen, grpcServer(store))
+		default:
+			errc <- fmt.Errorf("invalid -storage %q", *storage)
+		}
+	}()
 	go func() {
 		c := make(chan os.Signal)
 		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-		errs <- fmt.Errorf("%s", <-c)
-	}()
-	go func() {
-		logger.Printf("HTTP simple store starting (%s)", *httpListen)
-		http.Handle("/", makeHandler(router, peer, simpleStore, logger))
-		errs <- http.ListenAndServe(*httpListen, nil)
+		errc <- fmt.Errorf("%s", <-c)
 	}()
 	go func() {
 		<-removedc
-		errs <- fmt.Errorf("Raft node removed from cluster")
+		errc <- fmt.Errorf("Raft node removed from cluster")
 	}()
 	go func() {
 		<-shrunkc
-		errs <- fmt.Errorf("Raft cluster got too small")
+		errc <- fmt.Errorf("Raft cluster got too small")
 	}()
-	log.Print(<-errs)
+	logger.Print(<-errc)
 }
 
 func translateVia(router *mesh.Router) peerTranslator {
