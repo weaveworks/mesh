@@ -17,32 +17,35 @@ import (
 )
 
 type simpleStore struct {
-	mtx       sync.RWMutex
-	data      map[string]string
-	watchers  map[string]map[chan<- string]struct{}
-	snapshotc chan raftpb.Snapshot
-	entryc    chan raftpb.Entry
-	proposalc chan []byte
-	actionc   chan func()
-	quitc     chan struct{}
-	logger    *log.Logger
+	mtx        sync.RWMutex
+	data       map[string]string
+	watchers   map[string]map[chan<- string]struct{}
+	proposalc  chan<- []byte
+	snapshotc  <-chan raftpb.Snapshot
+	entryc     <-chan raftpb.Entry
+	confentryc chan<- raftpb.Entry
+	actionc    chan func()
+	quitc      chan struct{}
+	logger     *log.Logger
 }
 
 func newSimpleStore(
-	snapshotc chan raftpb.Snapshot,
-	entryc chan raftpb.Entry,
-	proposalc chan []byte,
+	proposalc chan<- []byte,
+	snapshotc <-chan raftpb.Snapshot,
+	entryc <-chan raftpb.Entry,
+	confentryc chan<- raftpb.Entry,
 	logger *log.Logger,
 ) *simpleStore {
 	s := &simpleStore{
-		data:      map[string]string{},
-		watchers:  map[string]map[chan<- string]struct{}{},
-		snapshotc: snapshotc,
-		entryc:    entryc,
-		proposalc: proposalc,
-		actionc:   make(chan func()),
-		quitc:     make(chan struct{}),
-		logger:    logger,
+		data:       map[string]string{},
+		watchers:   map[string]map[chan<- string]struct{}{},
+		proposalc:  proposalc,
+		snapshotc:  snapshotc,
+		entryc:     entryc,
+		confentryc: confentryc,
+		actionc:    make(chan func()),
+		quitc:      make(chan struct{}),
+		logger:     logger,
 	}
 	go s.loop()
 	return s
@@ -53,12 +56,12 @@ func (s *simpleStore) loop() {
 		select {
 		case snapshot := <-s.snapshotc:
 			if err := s.applySnapshot(snapshot); err != nil {
-				s.logger.Printf("state machine: apply snapshot: %v", err)
+				s.logger.Printf("simple store: apply snapshot: %v", err)
 			}
 
 		case entry := <-s.entryc:
 			if err := s.applyCommittedEntry(entry); err != nil {
-				s.logger.Printf("state machine: apply committed entry: %v", err)
+				s.logger.Printf("simple store: apply committed entry: %v", err)
 			}
 
 		case f := <-s.actionc:
@@ -72,11 +75,11 @@ func (s *simpleStore) loop() {
 
 func (s *simpleStore) applySnapshot(snapshot raftpb.Snapshot) error {
 	if len(snapshot.Data) == 0 {
-		//s.logger.Printf("state machine: apply snapshot with empty snapshot; skipping")
+		//s.logger.Printf("simple store: apply snapshot with empty snapshot; skipping")
 		return nil
 	}
-	s.logger.Printf("state machine: applying snapshot: size %d", len(snapshot.Data))
-	s.logger.Printf("state machine: applying snapshot: metadata %s", snapshot.Metadata.String())
+	s.logger.Printf("simple store: applying snapshot: size %d", len(snapshot.Data))
+	s.logger.Printf("simple store: applying snapshot: metadata %s", snapshot.Metadata.String())
 	if err := json.Unmarshal(snapshot.Data, &s.data); err != nil {
 		return err
 	}
@@ -88,29 +91,30 @@ func (s *simpleStore) applyCommittedEntry(entry raftpb.Entry) error {
 	case raftpb.EntryNormal:
 		break
 	case raftpb.EntryConfChange:
-		s.logger.Printf("state machine: ignoring ConfChange entry")
+		s.logger.Printf("simple store: forwarding ConfChange entry")
+		s.confentryc <- entry
 		return nil
 	default:
-		s.logger.Printf("state machine: got unknown entry type %s", entry.Type)
+		s.logger.Printf("simple store: got unknown entry type %s", entry.Type)
 		return fmt.Errorf("unknown entry type %d", entry.Type)
 	}
 
 	// entry.Size can be nonzero when len(entry.Data) == 0
 	if len(entry.Data) <= 0 {
-		s.logger.Printf("state machine: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
+		s.logger.Printf("simple store: got empty committed entry (term %d, index %d, type %s); skipping", entry.Term, entry.Index, entry.Type)
 		return nil
 	}
 
 	var single map[string]string
 	if err := json.Unmarshal(entry.Data, &single); err != nil {
-		s.logger.Printf("state machine: unmarshaling entry.Data (%s): %v", entry.Data, err)
+		s.logger.Printf("simple store: unmarshaling entry.Data (%s): %v", entry.Data, err)
 		return err
 	}
 	if n := len(single); n != 1 {
-		s.logger.Printf("state machine: got entry with %d keys; strange", n)
+		s.logger.Printf("simple store: got entry with %d keys; strange", n)
 	}
 
-	s.logger.Printf("state machine: applying committed entry %v", single)
+	s.logger.Printf("simple store: applying committed entry %v", single)
 
 	// TODO(pb): maybe early return?
 	// TODO(pb): do I need to validate the index somehow?
@@ -159,7 +163,7 @@ func (s *simpleStore) watch(key string, results chan<- string) (cancel chan<- st
 			s.watchers[key] = map[chan<- string]struct{}{} // first watcher for this key
 		}
 		s.watchers[key][results] = struct{}{} // register the update chan
-		s.logger.Printf("state machine: watch key %q", key)
+		s.logger.Printf("simple store: watch key %q", key)
 		c := make(chan struct{})
 		go func() {
 			<-c                     // when the user cancels the watch,
@@ -175,22 +179,22 @@ func (s *simpleStore) watch(key string, results chan<- string) (cancel chan<- st
 func (s *simpleStore) unwatch(key string, c chan<- string) {
 	s.actionc <- func() {
 		if _, ok := s.watchers[key]; !ok {
-			s.logger.Printf("state machine: unwatch key %q had no watchers; strange", key)
+			s.logger.Printf("simple store: unwatch key %q had no watchers; strange", key)
 			return
 		}
 		if s.watchers[key] == nil {
-			s.logger.Printf("state machine: unwatch key %q revealed nil map; logic error", key)
+			s.logger.Printf("simple store: unwatch key %q revealed nil map; logic error", key)
 			return
 		}
 		if _, ok := s.watchers[key][c]; !ok {
-			s.logger.Printf("state machine: unwatch key %q with missing chan; strange", key)
+			s.logger.Printf("simple store: unwatch key %q with missing chan; strange", key)
 			return
 		}
 		delete(s.watchers[key], c)
 		if len(s.watchers[key]) == 0 {
 			delete(s.watchers, key)
 		}
-		s.logger.Printf("state machine: unwatch key %q", key)
+		s.logger.Printf("simple store: unwatch key %q", key)
 	}
 }
 

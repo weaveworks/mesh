@@ -37,16 +37,17 @@ func main() {
 	flag.Var(peers, "peer", "initial peer (may be repeated)")
 	flag.Parse()
 
-	logger := log.New(os.Stderr, *nickname+"> ", log.LstdFlags)
-
 	if *quicktest > 0 {
 		*hwaddr = fmt.Sprintf("00:00:00:00:00:0%d", *quicktest)
 		*meshListen = fmt.Sprintf("0.0.0.0:600%d", *quicktest)
 		*apiListen = fmt.Sprintf("0.0.0.0:800%d", *quicktest)
+		*nickname = fmt.Sprintf("%d", *quicktest)
 		for i := 1; i <= 9; i++ {
 			peers.Set(fmt.Sprintf("127.0.0.1:600%d", i))
 		}
 	}
+
+	logger := log.New(os.Stderr, *nickname+"> ", log.LstdFlags)
 
 	host, portStr, err := net.SplitHostPort(*meshListen)
 	if err != nil {
@@ -117,15 +118,14 @@ func main() {
 	}
 
 	var (
-		incomingc    = make(chan raftpb.Message)    // from meshconn to controller
-		outgoingc    = make(chan raftpb.Message)    // from controller to meshconn
-		unreachablec = make(chan uint64, 10000)     // from meshconn to controller
-		confchangec  = make(chan raftpb.ConfChange) // from meshconn to controller
-		snapshotc    = make(chan raftpb.Snapshot)   // from controller to state machine
-		entryc       = make(chan raftpb.Entry)      // from controller to demuxer
-		confentryc   = make(chan raftpb.Entry)      // from demuxer to configurator
-		normalentryc = make(chan raftpb.Entry)      // from demuxer to state
-		proposalc    = make(chan []byte)            // from state machine to controller
+		incomingc    = make(chan raftpb.Message)    // from meshconn to ctrl
+		outgoingc    = make(chan raftpb.Message)    // from ctrl to meshconn
+		unreachablec = make(chan uint64, 10000)     // from meshconn to ctrl
+		confchangec  = make(chan raftpb.ConfChange) // from meshconn to ctrl
+		snapshotc    = make(chan raftpb.Snapshot)   // from ctrl to state machine
+		entryc       = make(chan raftpb.Entry)      // from ctrl to state
+		confentryc   = make(chan raftpb.Entry)      // from state to configurator
+		proposalc    = make(chan []byte)            // from state machine to ctrl
 		removedc     = make(chan struct{})          // from ctrl to us
 		shrunkc      = make(chan struct{})          // from membership to us
 	)
@@ -151,12 +151,12 @@ func main() {
 	switch *storage {
 	case "simple":
 		logger.Printf("HTTP simple store starting (%s)", *apiListen)
-		store := newSimpleStore(snapshotc, entryc, proposalc, logger)
+		store := newSimpleStore(proposalc, snapshotc, entryc, confentryc, logger)
 		http.Handle("/", makeHandler(router, peer, store, logger))
 		listenAndServe = func() error { return http.ListenAndServe(*apiListen, nil) }
 	case "etcd":
 		logger.Printf("etcd V3 (gRPC) engine starting (%s)", *apiListen)
-		store := newEtcdStore(proposalc, snapshotc, entryc, logger)
+		store := newEtcdStore(proposalc, snapshotc, entryc, confentryc, logger)
 		defer store.stop()
 		listenAndServe = func() error { return grpcListenAndServe(*apiListen, grpcServer(store)) }
 	default:
@@ -166,9 +166,6 @@ func main() {
 	// Create the controller, which drives the Raft node internally.
 	ctrl := newCtrl(self, others, *n, incomingc, outgoingc, unreachablec, confchangec, snapshotc, entryc, proposalc, removedc, logger)
 	defer ctrl.stop()
-
-	// Create the demuxer, splitting all committed entries to ConfChange and Normal entries.
-	go demux(entryc, confentryc, normalentryc)
 
 	errc := make(chan error)
 	go func() {
@@ -240,15 +237,4 @@ func mustHostname() string {
 		panic(err)
 	}
 	return hostname
-}
-
-func demux(in <-chan raftpb.Entry, confchangec, normalc chan<- raftpb.Entry) {
-	for e := range in {
-		switch e.Type {
-		case raftpb.EntryConfChange:
-			confchangec <- e
-		default:
-			normalc <- e
-		}
-	}
 }

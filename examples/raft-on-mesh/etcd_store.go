@@ -42,31 +42,38 @@ func grpcListenAndServe(addr string, server *wackygrpc.Server) error {
 	return server.Serve(ln)
 }
 
-// Transport-agnostic reimplementation of coreos/etcd/etcdserver.
-// The original is unsuitable because it is tightly coupled to persistent storage, an HTTP transport, etc.
-// Implements selected etcd V3 API (gRPC) methods.
+// Transport-agnostic reimplementation of coreos/etcd/etcdserver. The original
+// is unsuitable because it is tightly coupled to persistent storage, an HTTP
+// transport, etc. Implements selected etcd V3 API (gRPC) methods.
 type etcdStore struct {
 	proposalc   chan<- []byte
 	snapshotc   <-chan raftpb.Snapshot
 	entryc      <-chan raftpb.Entry
+	confentryc  chan<- raftpb.Entry
 	actionc     chan func()
 	quitc       chan struct{}
 	terminatedc chan struct{}
 	logger      *log.Logger
 
-	dbPath string // remove on exit
+	dbPath string // please os.RemoveAll on exit
 	kv     storage.KV
 	lessor lease.Lessor
-	index  storage.ConsistentIndexGetter
+	index  *consistentIndex // see comment on type
 
 	idgen   <-chan uint64
 	pending map[uint64]chan<- wackyproto.Message
 }
 
-func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, entryc <-chan raftpb.Entry, logger *log.Logger) *etcdStore {
+func newEtcdStore(
+	proposalc chan<- []byte,
+	snapshotc <-chan raftpb.Snapshot,
+	entryc <-chan raftpb.Entry,
+	confentryc chan<- raftpb.Entry,
+	logger *log.Logger,
+) *etcdStore {
 	// It would be much better if we could have a proper in-memory backend. Alas:
 	// backend.Backend is tightly coupled to bolt.DB, and both are tightly coupled
-	// to os.Open et. al. So we'd need to fork both Bolt and backend. A task for
+	// to os.Open &c. So we'd need to fork both Bolt and backend. A task for
 	// another day.
 	f, err := ioutil.TempFile(os.TempDir(), "mesh_etcd_backend_")
 	if err != nil {
@@ -74,6 +81,7 @@ func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, ent
 	}
 	dbPath := f.Name()
 	f.Close()
+	logger.Printf("etcd store: using %s", dbPath)
 
 	b := backend.NewDefaultBackend(dbPath)
 	lessor := lease.NewLessor(b)
@@ -84,6 +92,7 @@ func newEtcdStore(proposalc chan<- []byte, snapshotc <-chan raftpb.Snapshot, ent
 		proposalc:   proposalc,
 		snapshotc:   snapshotc,
 		entryc:      entryc,
+		confentryc:  confentryc,
 		actionc:     make(chan func()),
 		quitc:       make(chan struct{}),
 		terminatedc: make(chan struct{}),
@@ -212,10 +221,29 @@ func (s *etcdStore) Hash(ctx wackycontext.Context, req *etcdserverpb.HashRequest
 	return nil, errors.New("not implemented")
 }
 
-// (ಠ_ಠ)
+// The "consistent index" is the index number of the most recent committed
+// entry. This logical value is duplicated and tracked in multiple places
+// throughout the etcd server and storage code.
+//
+// For our part, we are expected to store one instance of this number, setting
+// it whenever we receive a committed entry via entryc, and making it available
+// for queries.
+//
+// The etcd storage backend is given a reference to this instance in the form of
+// a ConsistentIndexGetter interface. In addition, it tracks its own view of the
+// consistent index in a special bucket+key. See package etcd/storage, type
+// consistentWatchableStore, method consistentIndex.
+//
+// Whenever a user makes an e.g. Put request, these values are compared. If
+// there is some inconsistency, the transaction is marked as "skip" and becomes
+// a no-op. This happens transparently to the user. See package etcd/storage,
+// type consistentWatchableStore, method TxnBegin.
+//
+// tl;dr: (ಠ_ಠ)
 type consistentIndex struct{ i uint64 }
 
 func (i *consistentIndex) ConsistentIndex() uint64 { return i.i }
+func (i *consistentIndex) set(index uint64)        { i.i = index }
 
 func makeIDGen() <-chan uint64 {
 	c := make(chan uint64)
@@ -282,11 +310,21 @@ func (s *etcdStore) applySnapshot(snapshot raftpb.Snapshot) error {
 }
 
 func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
+	// Set the consistent index regardless of the outcome. Because we need to do
+	// this for all committed entries, we need to receive all committed entries,
+	// and must therefore take responsibility to demux the conf changes to the
+	// configurator via confentryc.
+	//
+	// This requirement is unique to the etcd store. But for symmetry, we assign
+	// the same responsibility to the simple store.
+	s.index.set(entry.Index)
+
 	switch entry.Type {
 	case raftpb.EntryNormal:
 		break
 	case raftpb.EntryConfChange:
-		s.logger.Printf("etcd store: ignoring ConfChange entry")
+		s.logger.Printf("etcd store: forwarding ConfChange entry")
+		s.confentryc <- entry
 		return nil
 	default:
 		s.logger.Printf("etcd store: got unknown entry type %s", entry.Type)
@@ -374,7 +412,10 @@ func (s *etcdStore) registerPending(id uint64) (<-chan wackyproto.Message, error
 func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
 	c, ok := s.pending[id]
 	if !ok {
-		s.logger.Printf("etcd store: signal pending ID %d, but nothing was pending; perhaps it was canceled?", id)
+		// InternalRaftRequests are replicated via Raft. So all peers will invoke this
+		// method for all messages on commit. But only the peer that serviced the API
+		// request will have an operating pending. So, this is a normal "failure"
+		// mode.
 		return
 	}
 	c <- msg
@@ -390,8 +431,9 @@ func (s *etcdStore) cancelPending(id uint64) {
 }
 
 func (s *etcdStore) removeDB() {
+	s.logger.Printf("etcd store: removing tmp DB %s", s.dbPath)
 	if err := os.RemoveAll(s.dbPath); err != nil {
-		s.logger.Printf("etcd store: error removing tmp DB %s: %v", s.dbPath, err)
+		s.logger.Printf("etcd store: removing tmp DB %s: %v", s.dbPath, err)
 	}
 }
 
