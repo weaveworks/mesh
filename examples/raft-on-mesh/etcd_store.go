@@ -23,13 +23,12 @@ import (
 
 func grpcServer(s *etcdStore, options ...wackygrpc.ServerOption) *wackygrpc.Server {
 	srv := wackygrpc.NewServer(options...)
+	//etcdserverpb.RegisterAuthServer(srv, s)
+	//etcdserverpb.RegisterClusterServer(srv, s)
 	etcdserverpb.RegisterKVServer(srv, s)
-	//etcdserverpb.RegisterAuthServer(srv, makeAuthServer(s))
-	//etcdserverpb.RegisterClusterServer(srv, makeClusterServer(s))
-	//etcdserverpb.RegisterKVServer(srv, makeKVServer(s))
-	//etcdserverpb.RegisterLeaseServer(srv, makeLeaseServer(s))
-	//etcdserverpb.RegisterMaintenanceServer(srv, makeMaintenanceServer(s))
-	//etcdserverpb.RegisterWatchServer(srv, makeWatchServer(s))
+	//etcdserverpb.RegisterLeaseServer(srv, s)
+	//etcdserverpb.RegisterMaintenanceServer(srv, s)
+	//etcdserverpb.RegisterWatchServer(srv, s)
 	return srv
 }
 
@@ -61,7 +60,7 @@ type etcdStore struct {
 	index  *consistentIndex // see comment on type
 
 	idgen   <-chan uint64
-	pending map[uint64]chan<- wackyproto.Message
+	pending map[uint64]responseChans
 }
 
 func newEtcdStore(
@@ -104,7 +103,7 @@ func newEtcdStore(
 		index:  index,
 
 		idgen:   makeIDGen(),
-		pending: map[uint64]chan<- wackyproto.Message{},
+		pending: map[uint64]responseChans{},
 	}
 	go s.loop()
 	return s
@@ -114,7 +113,7 @@ func newEtcdStore(
 // Range gets the keys in the range from the store.
 func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Range: req}
-	c, err := s.proposeInternalRaftRequest(ireq)
+	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +121,10 @@ func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeReque
 	case <-ctx.Done():
 		s.cancelInternalRaftRequest(ireq)
 		return nil, ctx.Err()
-	case msg := <-c:
+	case msg := <-msgc:
 		return msg.(*etcdserverpb.RangeResponse), nil
+	case err := <-errc:
+		return nil, err
 	case <-s.quitc:
 		return nil, errStopped
 	}
@@ -135,7 +136,7 @@ func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeReque
 // and generates one event in the event history.
 func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Put: req}
-	c, err := s.proposeInternalRaftRequest(ireq)
+	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +144,10 @@ func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) 
 	case <-ctx.Done():
 		s.cancelInternalRaftRequest(ireq)
 		return nil, ctx.Err()
-	case msg := <-c:
+	case msg := <-msgc:
 		return msg.(*etcdserverpb.PutResponse), nil
+	case err := <-errc:
+		return nil, err
 	case <-s.quitc:
 		return nil, errStopped
 	}
@@ -156,7 +159,7 @@ func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) 
 // and generates one event in the event history.
 func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, DeleteRange: req}
-	c, err := s.proposeInternalRaftRequest(ireq)
+	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
 		return nil, err
 	}
@@ -164,8 +167,10 @@ func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.Dele
 	case <-ctx.Done():
 		s.cancelInternalRaftRequest(ireq)
 		return nil, ctx.Err()
-	case msg := <-c:
+	case msg := <-msgc:
 		return msg.(*etcdserverpb.DeleteRangeResponse), nil
+	case err := <-errc:
+		return nil, err
 	case <-s.quitc:
 		return nil, errStopped
 	}
@@ -178,7 +183,7 @@ func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.Dele
 // It is not allowed to modify the same key several times within one txn.
 func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Txn: req}
-	c, err := s.proposeInternalRaftRequest(ireq)
+	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
 		return nil, err
 	}
@@ -186,8 +191,10 @@ func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) 
 	case <-ctx.Done():
 		s.cancelInternalRaftRequest(ireq)
 		return nil, ctx.Err()
-	case msg := <-c:
+	case msg := <-msgc:
 		return msg.(*etcdserverpb.TxnResponse), nil
+	case err := <-errc:
+		return nil, err
 	case <-s.quitc:
 		return nil, errStopped
 	}
@@ -197,20 +204,9 @@ func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) 
 // Compact compacts the event history in s. User should compact the
 // event history periodically, or it will grow infinitely.
 func (s *etcdStore) Compact(ctx wackycontext.Context, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
-	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Compaction: req}
-	c, err := s.proposeInternalRaftRequest(ireq)
-	if err != nil {
-		return nil, err
-	}
-	select {
-	case <-ctx.Done():
-		s.cancelInternalRaftRequest(ireq)
-		return nil, ctx.Err()
-	case msg := <-c:
-		return msg.(*etcdserverpb.CompactionResponse), nil
-	case <-s.quitc:
-		return nil, errStopped
-	}
+	// We don't have snapshotting yet, so compact just puts us in a bad state.
+	// TODO(pb): fix this when we implement snapshotting.
+	return nil, errors.New("not implemented")
 }
 
 // Hash implements gRPC KVServer.
@@ -218,7 +214,16 @@ func (s *etcdStore) Compact(ctx wackycontext.Context, req *etcdserverpb.Compacti
 // This is designed for testing purpose. Do not use this in production when there
 // are ongoing transactions.
 func (s *etcdStore) Hash(ctx wackycontext.Context, req *etcdserverpb.HashRequest) (*etcdserverpb.HashResponse, error) {
-	return nil, errors.New("not implemented")
+	h, err := s.kv.Hash()
+	if err != nil {
+		return nil, err
+	}
+	return &etcdserverpb.HashResponse{
+		Header: &etcdserverpb.ResponseHeader{
+			Revision: s.kv.Rev(),
+		},
+		Hash: h,
+	}, nil
 }
 
 // The "consistent index" is the index number of the most recent committed
@@ -262,9 +267,15 @@ const (
 )
 
 var (
-	errStopped = errors.New("etcd store was stopped")
-	errTooBig  = errors.New("request too large to send")
+	errStopped  = errors.New("etcd store was stopped")
+	errTooBig   = errors.New("request too large to send")
+	errCanceled = errors.New("request canceled")
 )
+
+type responseChans struct {
+	msgc chan<- wackyproto.Message
+	errc chan<- error
+}
 
 func (s *etcdStore) loop() {
 	defer close(s.terminatedc)
@@ -346,7 +357,7 @@ func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
 	msg, err := s.applyInternalRaftRequest(req)
 	if err != nil {
 		s.logger.Printf("etcd store: applying internal Raft request %d: %v", req.ID, err)
-		s.cancelPending(req.ID)
+		s.cancelPending(req.ID, err)
 		return err
 	}
 
@@ -356,25 +367,24 @@ func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
 }
 
 // From public API method to proposalc.
-func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (<-chan wackyproto.Message, error) {
+func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (<-chan wackyproto.Message, <-chan error, error) {
 	data, err := req.Marshal()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(data) > maxRequestBytes {
-		return nil, errTooBig
+		return nil, nil, errTooBig
 	}
-	c, err := s.registerPending(req.ID)
+	msgc, errc, err := s.registerPending(req.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s.proposalc <- data
-	return c, nil
+	return msgc, errc, nil
 }
 
-func (s *etcdStore) cancelInternalRaftRequest(req etcdserverpb.InternalRaftRequest) error {
-	s.cancelPending(req.ID)
-	return nil
+func (s *etcdStore) cancelInternalRaftRequest(req etcdserverpb.InternalRaftRequest) {
+	s.cancelPending(req.ID, errCanceled)
 }
 
 // From committed entryc, back to public API method.
@@ -400,17 +410,18 @@ func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftReques
 	}
 }
 
-func (s *etcdStore) registerPending(id uint64) (<-chan wackyproto.Message, error) {
+func (s *etcdStore) registerPending(id uint64) (<-chan wackyproto.Message, <-chan error, error) {
 	if _, ok := s.pending[id]; ok {
-		return nil, fmt.Errorf("pending ID %d already registered", id)
+		return nil, nil, fmt.Errorf("pending ID %d already registered", id)
 	}
-	c := make(chan wackyproto.Message)
-	s.pending[id] = c
-	return c, nil
+	msgc := make(chan wackyproto.Message)
+	errc := make(chan error)
+	s.pending[id] = responseChans{msgc, errc}
+	return msgc, errc, nil
 }
 
 func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
-	c, ok := s.pending[id]
+	rc, ok := s.pending[id]
 	if !ok {
 		// InternalRaftRequests are replicated via Raft. So all peers will invoke this
 		// method for all messages on commit. But only the peer that serviced the API
@@ -418,15 +429,17 @@ func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
 		// mode.
 		return
 	}
-	c <- msg
+	rc.msgc <- msg
 	delete(s.pending, id)
 }
 
-func (s *etcdStore) cancelPending(id uint64) {
-	if _, ok := s.pending[id]; !ok {
+func (s *etcdStore) cancelPending(id uint64, err error) {
+	rc, ok := s.pending[id]
+	if !ok {
 		s.logger.Printf("etcd store: cancel pending ID %d, but nothing was pending; strange", id)
 		return
 	}
+	rc.errc <- err
 	delete(s.pending, id)
 }
 
