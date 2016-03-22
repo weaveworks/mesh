@@ -103,10 +103,10 @@ func (peer *localPeer) createConnection(localAddr string, peerAddr string, accep
 // ACTOR client API
 
 // Synchronous.
-func (peer *localPeer) doAddConnection(conn ourConnection) error {
+func (peer *localPeer) doAddConnection(conn ourConnection, isRestartedPeer bool) error {
 	resultChan := make(chan error)
 	peer.actionChan <- func() {
-		resultChan <- peer.handleAddConnection(conn)
+		resultChan <- peer.handleAddConnection(conn, isRestartedPeer)
 	}
 	return <-resultChan
 }
@@ -148,7 +148,7 @@ func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
 	}
 }
 
-func (peer *localPeer) handleAddConnection(conn ourConnection) error {
+func (peer *localPeer) handleAddConnection(conn ourConnection, isRestartedPeer bool) error {
 	if peer.Peer != conn.getLocal() {
 		panic("Attempt made to add connection to peer where peer is not the source of connection")
 	}
@@ -181,9 +181,13 @@ func (peer *localPeer) handleAddConnection(conn ourConnection) error {
 	}
 	_, isConnectedPeer := peer.router.Routes.Unicast(toName)
 	peer.addConnection(conn)
-	if isConnectedPeer {
+	switch {
+	case isRestartedPeer:
+		conn.log("connection added (restarted peer)")
+		peer.router.sendAllGossipDown(conn)
+	case isConnectedPeer:
 		conn.log("connection added")
-	} else {
+	default:
 		conn.log("connection added (new peer)")
 		peer.router.sendAllGossipDown(conn)
 	}

@@ -81,7 +81,7 @@ func (router *Router) newTestGossipConnection(r *Router) *mockGossipConnection {
 		start:            make(chan struct{}),
 	}
 	conn.senders = newGossipSenders(conn, make(chan struct{}))
-	router.Ourself.handleAddConnection(conn)
+	router.Ourself.handleAddConnection(conn, false)
 	router.Ourself.handleConnectionEstablished(conn)
 	return conn
 }
