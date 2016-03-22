@@ -2,6 +2,7 @@ package metcd
 
 import (
 	"log"
+	"net"
 	"time"
 
 	"github.com/coreos/etcd/raft/raftpb"
@@ -68,6 +69,10 @@ func (m *membership) loop(members uint64set) {
 			return
 		}
 	}
+}
+
+func otherAddrs(router *mesh.Router) []net.Addr {
+	panic("TODO(pb)")
 }
 
 func membershipSet(router *mesh.Router) uint64set {

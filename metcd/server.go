@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 
 	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
 	"github.com/coreos/etcd/raft/raftpb"
@@ -17,19 +18,17 @@ import (
 func NewServer(
 	router *mesh.Router,
 	peer *meshconn.Peer,
-	otherAddrs func(*mesh.Router) []net.Addr,
 	minPeerCount int,
 	logger *log.Logger,
 ) *wackygrpc.Server {
 	c := make(chan *wackygrpc.Server)
-	go createAndManage(router, peer, otherAddrs, minPeerCount, logger, c)
+	go grpcManager(router, peer, minPeerCount, logger, c)
 	return <-c
 }
 
-func createAndManage(
+func grpcManager(
 	router *mesh.Router,
 	peer *meshconn.Peer,
-	otherAddrs func(*mesh.Router) []net.Addr,
 	minPeerCount int,
 	logger *log.Logger,
 	out chan<- *wackygrpc.Server,
@@ -97,6 +96,41 @@ func createAndManage(
 	logger.Print(<-errc)
 }
 
+// NewDefaultServer is like NewServer, but we take care of creating a mesh.Router
+// and meshconn.Peer for you, using sane defaults. If you need more fine-grained
+// control, create these components yourself and use NewServer.
+func NewDefaultServer(minPeerCount int, logger *log.Logger) *wackygrpc.Server {
+	var (
+		peerName = mustPeerName()
+		nickName = mustHostname()
+		host     = "0.0.0.0"
+		port     = 6379
+		password = ""
+		channel  = "metcd"
+	)
+	router := mesh.NewRouter(mesh.Config{
+		Host:               host,
+		Port:               port,
+		ProtocolMinVersion: mesh.ProtocolMinVersion,
+		Password:           []byte(password),
+		ConnLimit:          64,
+		PeerDiscovery:      true,
+		TrustedSubnets:     []*net.IPNet{},
+	}, peerName, nickName, mesh.NullOverlay{})
+
+	// Create a meshconn.Peer and connect it to a channel.
+	peer := meshconn.NewPeer(router.Ourself.Peer.Name, router.Ourself.UID, logger)
+	gossip := router.NewGossip(channel, peer)
+	peer.Register(gossip)
+
+	// Start the router and join the mesh.
+	// Note that we don't ever stop the router.
+	// This may or may not be a problem.
+	router.Start()
+
+	return NewServer(router, peer, minPeerCount, logger)
+}
+
 func translateVia(router *mesh.Router) peerTranslator {
 	return func(uid mesh.PeerUID) (mesh.PeerName, error) {
 		for _, d := range router.Peers.Descriptions() {
@@ -106,4 +140,33 @@ func translateVia(router *mesh.Router) peerTranslator {
 		}
 		return 0, fmt.Errorf("peer UID %x not known", uid)
 	}
+}
+
+func mustPeerName() mesh.PeerName {
+	peerName, err := mesh.PeerNameFromString(mustHardwareAddr())
+	if err != nil {
+		panic(err)
+	}
+	return peerName
+}
+
+func mustHardwareAddr() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		panic(err)
+	}
+	for _, iface := range ifaces {
+		if s := iface.HardwareAddr.String(); s != "" {
+			return s
+		}
+	}
+	panic("no valid network interfaces")
+}
+
+func mustHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		panic(err)
+	}
+	return hostname
 }
