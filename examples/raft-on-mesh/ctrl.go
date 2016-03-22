@@ -161,6 +161,7 @@ func (c *ctrl) driveRaft() {
 			c.node.ReportUnreachable(id)
 
 		case <-c.stopc:
+			c.logger.Printf("ctrl: got stop signal")
 			return
 		}
 	}
