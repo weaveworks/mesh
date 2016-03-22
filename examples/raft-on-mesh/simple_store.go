@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/weaveworks/mesh"
-	"github.com/weaveworks/mesh/examples/meshconn"
+	"github.com/weaveworks/mesh/meshconn"
 )
 
 type simpleStore struct {

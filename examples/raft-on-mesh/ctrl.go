@@ -11,7 +11,7 @@ import (
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 
-	"github.com/weaveworks/mesh/examples/meshconn"
+	"github.com/weaveworks/mesh/meshconn"
 )
 
 // +-------------+   +-----------------+               +-------------------------+   +-------+

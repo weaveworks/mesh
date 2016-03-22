@@ -10,7 +10,7 @@ import (
 	"github.com/coreos/etcd/raft/raftpb"
 
 	"github.com/weaveworks/mesh"
-	"github.com/weaveworks/mesh/examples/meshconn"
+	"github.com/weaveworks/mesh/meshconn"
 )
 
 func TestCtrlTerminates(t *testing.T) {
