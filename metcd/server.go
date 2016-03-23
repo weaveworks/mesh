@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
 	"github.com/coreos/etcd/raft/raftpb"
@@ -15,6 +16,8 @@ import (
 
 // NewServer returns a gRPC server that implements the etcd V3 API.
 // It uses the passed mesh components to create and manage the Raft transport.
+// For the moment, it blocks until the mesh has minPeerCount peers.
+// (This responsibility should instead be given to the caller.)
 func NewServer(
 	router *mesh.Router,
 	peer *meshconn.Peer,
@@ -33,6 +36,31 @@ func grpcManager(
 	logger *log.Logger,
 	out chan<- *wackygrpc.Server,
 ) {
+	// Identify mesh peers to either create or join a cluster.
+	// This algorithm is presently completely insufficient.
+	// It suffers from timing failures, and doesn't understand channels.
+	// TODO(pb): use gossip to agree on better starting conditions
+	var (
+		self   = meshconn.MeshAddr{PeerName: router.Ourself.Peer.Name, PeerUID: router.Ourself.UID}
+		others = []net.Addr{}
+	)
+	for {
+		others = others[:0]
+		for _, desc := range router.Peers.Descriptions() {
+			others = append(others, meshconn.MeshAddr{PeerName: desc.Name, PeerUID: desc.UID})
+		}
+		if len(others) == minPeerCount {
+			logger.Printf("detected %d peers; creating", len(others))
+			break
+		} else if len(others) > minPeerCount {
+			logger.Printf("detected %d peers; joining", len(others))
+			others = others[:0] // empty others slice means join
+			break
+		}
+		logger.Printf("detected %d peers; waiting...", len(others))
+		time.Sleep(time.Second)
+	}
+
 	var (
 		incomingc    = make(chan raftpb.Message)    // from meshconn to ctrl
 		outgoingc    = make(chan raftpb.Message)    // from ctrl to meshconn
@@ -71,10 +99,6 @@ func grpcManager(
 	defer store.stop()
 
 	// Create the controller, which drives the Raft node internally.
-	var (
-		self   = meshconn.MeshAddr{PeerName: router.Ourself.Peer.Name, PeerUID: router.Ourself.UID}
-		others = otherAddrs(router)
-	)
 	ctrl := newCtrl(self, others, minPeerCount, incomingc, outgoingc, unreachablec, confchangec, snapshotc, entryc, proposalc, removedc, logger)
 	defer ctrl.stop()
 
@@ -126,6 +150,7 @@ func NewDefaultServer(minPeerCount int, logger *log.Logger) *wackygrpc.Server {
 	// Start the router and join the mesh.
 	// Note that we don't ever stop the router.
 	// This may or may not be a problem.
+	// TODO(pb): determine if this is a super huge problem
 	router.Start()
 
 	return NewServer(router, peer, minPeerCount, logger)
