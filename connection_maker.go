@@ -37,6 +37,7 @@ const (
 	targetWaiting targetState = iota
 	targetAttempting
 	targetConnected
+	targetSuspended
 )
 
 // Information about an address where we may find a peer.
@@ -334,16 +335,23 @@ func (cm *connectionMaker) connectToTargets(validTarget map[string]struct{}, dir
 	now := time.Now() // make sure we catch items just added
 	after := maxDuration
 	for address, target := range cm.targets {
-		if target.state != targetWaiting {
+		if target.state != targetWaiting && target.state != targetSuspended {
 			continue
 		}
 		if _, valid := validTarget[address]; !valid {
-			delete(cm.targets, address)
+			// Not valid: suspend reconnects if direct peer,
+			// otherwise forget this target entirely
+			if _, direct := directTarget[address]; direct {
+				target.state = targetSuspended
+			} else {
+				delete(cm.targets, address)
+			}
 			continue
 		}
 		if target.tryAfter.IsZero() {
 			continue
 		}
+		target.state = targetWaiting
 		switch duration := target.tryAfter.Sub(now); {
 		case duration <= 0:
 			target.state = targetAttempting
