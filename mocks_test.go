@@ -29,7 +29,7 @@ func (peers *Peers) AddTestRemoteConnection(p1, p2 *Peer) {
 	fromPeer = peers.fetchWithDefault(fromPeer)
 	toPeer := newPeerFrom(p2)
 	toPeer = peers.fetchWithDefault(toPeer)
-	peers.ourself.addConnection(&remoteConnection{fromPeer, toPeer, "", false, false})
+	peers.ourself.addConnection(newRemoteConnection(fromPeer, toPeer, "", false, false))
 }
 
 func (peers *Peers) DeleteTestConnection(p *Peer) {
@@ -45,8 +45,8 @@ func (peers *Peers) DeleteTestConnection(p *Peer) {
 // separate type in order to distinguish what is created by the test
 // from what is created by the real code.
 func newMockConnection(from, to *Peer) Connection {
-	type mockConnection struct{ remoteConnection }
-	return &mockConnection{remoteConnection{from, to, "", false, false}}
+	type mockConnection struct{ *remoteConnection }
+	return &mockConnection{newRemoteConnection(from, to, "", false, false)}
 }
 
 func checkEqualConns(t *testing.T, ourName PeerName, got, wanted map[PeerName]Connection) {

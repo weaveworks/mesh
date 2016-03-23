@@ -77,7 +77,7 @@ func main() {
 		ConnLimit:          64,
 		PeerDiscovery:      true,
 		TrustedSubnets:     []*net.IPNet{},
-	}, name, *nickname, mesh.NullOverlay{})
+	}, name, *nickname, mesh.NullOverlay{}, logger)
 
 	// Create a meshconn.Peer.
 	peer := meshconn.NewPeer(name, router.Ourself.UID, logger)

@@ -13,16 +13,18 @@ type gossipChannel struct {
 	ourself  *localPeer
 	routes   *routes
 	gossiper Gossiper
+	logger   *log.Logger
 }
 
 // newGossipChannel returns a named, usable channel.
 // It delegates receiving duties to the passed Gossiper.
-func newGossipChannel(channelName string, ourself *localPeer, r *routes, g Gossiper) *gossipChannel {
+func newGossipChannel(channelName string, ourself *localPeer, r *routes, g Gossiper, logger *log.Logger) *gossipChannel {
 	return &gossipChannel{
 		name:     channelName,
 		ourself:  ourself,
 		routes:   r,
 		gossiper: g,
+		logger:   logger,
 	}
 }
 
@@ -134,7 +136,7 @@ func (c *gossipChannel) makeBroadcastMsg(srcName PeerName, msg []byte) protocolM
 }
 
 func (c *gossipChannel) log(args ...interface{}) {
-	log.Println(append(append([]interface{}{}, "[gossip "+c.name+"]:"), args...)...)
+	c.logger.Println(append(append([]interface{}{}, "[gossip "+c.name+"]:"), args...)...)
 }
 
 // GobEncode gob-encodes each item and returns the resulting byte slice.
@@ -143,7 +145,7 @@ func gobEncode(items ...interface{}) []byte {
 	enc := gob.NewEncoder(buf)
 	for _, i := range items {
 		if err := enc.Encode(i); err != nil {
-			log.Fatal(err)
+			panic(err)
 		}
 	}
 	return buf.Bytes()

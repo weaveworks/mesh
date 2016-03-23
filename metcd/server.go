@@ -140,7 +140,7 @@ func NewDefaultServer(minPeerCount int, logger *log.Logger) *wackygrpc.Server {
 		ConnLimit:          64,
 		PeerDiscovery:      true,
 		TrustedSubnets:     []*net.IPNet{},
-	}, peerName, nickName, mesh.NullOverlay{})
+	}, peerName, nickName, mesh.NullOverlay{}, logger)
 
 	// Create a meshconn.Peer and connect it to a channel.
 	peer := meshconn.NewPeer(router.Ourself.Peer.Name, router.Ourself.UID, logger)

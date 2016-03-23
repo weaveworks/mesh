@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -29,20 +30,20 @@ func main() {
 	flag.Var(peers, "peer", "initial peer (may be repeated)")
 	flag.Parse()
 
-	log.SetPrefix(*nickname + "> ")
+	logger := log.New(os.Stderr, *nickname+"> ", log.LstdFlags)
 
 	host, portStr, err := net.SplitHostPort(*meshListen)
 	if err != nil {
-		log.Fatalf("mesh address: %s: %v", *meshListen, err)
+		logger.Fatalf("mesh address: %s: %v", *meshListen, err)
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		log.Fatalf("mesh address: %s: %v", *meshListen, err)
+		logger.Fatalf("mesh address: %s: %v", *meshListen, err)
 	}
 
 	name, err := mesh.PeerNameFromString(*hwaddr)
 	if err != nil {
-		log.Fatalf("%s: %v", *hwaddr, err)
+		logger.Fatalf("%s: %v", *hwaddr, err)
 	}
 
 	router := mesh.NewRouter(mesh.Config{
@@ -53,38 +54,35 @@ func main() {
 		ConnLimit:          64,
 		PeerDiscovery:      true,
 		TrustedSubnets:     []*net.IPNet{},
-	}, name, *nickname, mesh.NullOverlay{})
+	}, name, *nickname, mesh.NullOverlay{}, log.New(ioutil.Discard, "", 0))
 
-	peer := newPeer(name, log.New(os.Stderr, *nickname+"> ", log.LstdFlags))
+	peer := newPeer(name, logger)
 	gossip := router.NewGossip(*channel, peer)
 	peer.register(gossip)
 
 	func() {
-		log.Printf("mesh router starting (%s)", *meshListen)
+		logger.Printf("mesh router starting (%s)", *meshListen)
 		router.Start()
 	}()
 	defer func() {
-		log.Printf("mesh router stopping")
+		logger.Printf("mesh router stopping")
 		router.Stop()
 	}()
 
 	router.ConnectionMaker.InitiateConnections(peers.slice(), true)
 
-	errs := make(chan error, 2)
-
+	errs := make(chan error)
 	go func() {
 		c := make(chan os.Signal)
 		signal.Notify(c, syscall.SIGINT)
 		errs <- fmt.Errorf("%s", <-c)
 	}()
-
 	go func() {
-		log.Printf("HTTP server starting (%s)", *httpListen)
+		logger.Printf("HTTP server starting (%s)", *httpListen)
 		http.HandleFunc("/", handle(peer))
 		errs <- http.ListenAndServe(*httpListen, nil)
 	}()
-
-	log.Print(<-errs)
+	logger.Print(<-errs)
 }
 
 type counter interface {
