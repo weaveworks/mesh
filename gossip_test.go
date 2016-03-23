@@ -27,6 +27,17 @@ func newTestRouter(name string) *Router {
 	return router
 }
 
+func (conn *mockGossipConnection) breakTie(dupConn LConnection) connectionTieBreak {
+	return tieBreakTied
+}
+
+func (conn *mockGossipConnection) shutdown(err error) {
+}
+
+func (conn *mockGossipConnection) log(args ...interface{}) {
+	fmt.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
+}
+
 func (conn *mockGossipConnection) SendProtocolMsg(pm protocolMsg) error {
 	<-conn.start
 	return conn.dest.handleGossip(pm.tag, pm.msg)
@@ -77,7 +88,7 @@ func (router *Router) DeleteTestGossipConnection(r *Router) {
 	toName := r.Ourself.Peer.Name
 	conn, _ := router.Ourself.ConnectionTo(toName)
 	router.Peers.dereference(conn.Remote())
-	router.Ourself.handleDeleteConnection(conn)
+	router.Ourself.handleDeleteConnection(conn.(LConnection))
 }
 
 // Create a Peer representing the receiver router, with connections to
