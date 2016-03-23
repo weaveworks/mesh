@@ -1,4 +1,4 @@
-package main
+package metcd
 
 import (
 	"errors"
@@ -11,7 +11,7 @@ import (
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
 
-	"github.com/weaveworks/mesh/examples/meshconn"
+	"github.com/weaveworks/mesh/meshconn"
 )
 
 // +-------------+   +-----------------+               +-------------------------+   +-------+

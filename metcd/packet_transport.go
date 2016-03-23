@@ -1,4 +1,4 @@
-package main
+package metcd
 
 import (
 	"log"
@@ -7,7 +7,7 @@ import (
 	"github.com/coreos/etcd/raft/raftpb"
 
 	"github.com/weaveworks/mesh"
-	"github.com/weaveworks/mesh/examples/meshconn"
+	"github.com/weaveworks/mesh/meshconn"
 )
 
 // packetTransport takes ownership of the net.PacketConn.
@@ -86,7 +86,6 @@ func (t *packetTransport) sendLoop() {
 			case t.unreachablec <- msg.To:
 				t.logger.Printf("packet transport: send to Raft ID %x: %v (unreachable; continuing) (%s)", msg.To, err, msg.Type)
 			default:
-				panic("dropped unreachable message")
 				t.logger.Printf("packet transport: send to Raft ID %x: %v (unreachable, report dropped; continuing) (%s)", msg.To, err, msg.Type)
 			}
 			continue
