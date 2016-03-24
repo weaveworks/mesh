@@ -53,10 +53,11 @@ type Router struct {
 	gossipChannels  gossipChannels
 	topologyGossip  Gossip
 	acceptLimiter   *tokenBucket
+	logger          *log.Logger
 }
 
 // NewRouter returns a new router. It must be started.
-func NewRouter(config Config, name PeerName, nickName string, overlay Overlay) *Router {
+func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, logger *log.Logger) *Router {
 	router := &Router{Config: config, gossipChannels: make(gossipChannels)}
 
 	if overlay == nil {
@@ -67,12 +68,13 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay) *
 	router.Ourself = newLocalPeer(name, nickName, router)
 	router.Peers = newPeers(router.Ourself)
 	router.Peers.OnGC(func(peer *Peer) {
-		log.Println("Removed unreachable peer", peer)
+		logger.Println("Removed unreachable peer", peer)
 	})
 	router.Routes = newRoutes(router.Ourself, router.Peers)
-	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, net.JoinHostPort(router.Host, "0"), router.Port, router.PeerDiscovery)
+	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, net.JoinHostPort(router.Host, "0"), router.Port, router.PeerDiscovery, logger)
 	router.topologyGossip = router.NewGossip("topology", router)
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
+	router.logger = logger
 
 	return router
 }
@@ -96,18 +98,18 @@ func (router *Router) usingPassword() bool {
 func (router *Router) listenTCP() {
 	localAddr, err := net.ResolveTCPAddr("tcp4", net.JoinHostPort(router.Host, fmt.Sprint(router.Port)))
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	ln, err := net.ListenTCP("tcp4", localAddr)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	go func() {
 		defer ln.Close()
 		for {
 			tcpConn, err := ln.AcceptTCP()
 			if err != nil {
-				log.Println(err)
+				router.logger.Println(err)
 				continue
 			}
 			router.acceptTCP(tcpConn)
@@ -118,20 +120,20 @@ func (router *Router) listenTCP() {
 
 func (router *Router) acceptTCP(tcpConn *net.TCPConn) {
 	remoteAddrStr := tcpConn.RemoteAddr().String()
-	log.Printf("->[%s] connection accepted", remoteAddrStr)
+	router.logger.Printf("->[%s] connection accepted", remoteAddrStr)
 	connRemote := newRemoteConnection(router.Ourself.Peer, nil, remoteAddrStr, false, false)
-	startLocalConnection(connRemote, tcpConn, router, true)
+	startLocalConnection(connRemote, tcpConn, router, true, router.logger)
 }
 
 // NewGossip returns a usable GossipChannel from the router.
 //
 // TODO(pb): rename?
 func (router *Router) NewGossip(channelName string, g Gossiper) Gossip {
-	channel := newGossipChannel(channelName, router.Ourself, router.Routes, g)
+	channel := newGossipChannel(channelName, router.Ourself, router.Routes, g, router.logger)
 	router.gossipLock.Lock()
 	defer router.gossipLock.Unlock()
 	if _, found := router.gossipChannels[channelName]; found {
-		log.Fatalf("[gossip] duplicate channel %s", channelName)
+		panic(fmt.Sprintf("[gossip] duplicate channel %s", channelName))
 	}
 	router.gossipChannels[channelName] = channel
 	return channel
@@ -149,7 +151,7 @@ func (router *Router) gossipChannel(channelName string) *gossipChannel {
 	if channel, found = router.gossipChannels[channelName]; found {
 		return channel
 	}
-	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{})
+	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{}, router.logger)
 	channel.log("created surrogate channel")
 	router.gossipChannels[channelName] = channel
 	return channel
@@ -277,7 +279,7 @@ func (router *Router) trusts(remote *remoteConnection) bool {
 		}
 	} else {
 		// Should not happen as remoteTCPAddr was obtained from TCPConn
-		log.Printf("Unable to parse remote TCP addr: %s", err)
+		router.logger.Printf("Unable to parse remote TCP addr: %s", err)
 	}
 	return false
 }

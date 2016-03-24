@@ -28,6 +28,7 @@ type connectionMaker struct {
 	connections map[Connection]struct{}
 	directPeers peerAddrs
 	actionChan  chan<- connectionMakerAction
+	logger      *log.Logger
 }
 
 // TargetState describes the connection state of a remote target.
@@ -57,7 +58,7 @@ type connectionMakerAction func() bool
 // peers, making outbound connections from localAddr, and listening on
 // port. If discovery is true, ConnectionMaker will attempt to
 // initiate new connections with peers it's not directly connected to.
-func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool) *connectionMaker {
+func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool, logger *log.Logger) *connectionMaker {
 	actionChan := make(chan connectionMakerAction, ChannelSize)
 	cm := &connectionMaker{
 		ourself:     ourself,
@@ -69,6 +70,7 @@ func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port
 		targets:     make(map[string]*target),
 		connections: make(map[Connection]struct{}),
 		actionChan:  actionChan,
+		logger:      logger,
 	}
 	go cm.queryLoop(actionChan)
 	return cm
@@ -365,9 +367,9 @@ func (cm *connectionMaker) connectToTargets(validTarget map[string]struct{}, dir
 }
 
 func (cm *connectionMaker) attemptConnection(address string, acceptNewPeer bool) {
-	log.Printf("->[%s] attempting connection", address)
-	if err := cm.ourself.createConnection(cm.localAddr, address, acceptNewPeer); err != nil {
-		log.Printf("->[%s] error during connection attempt: %v", address, err)
+	cm.logger.Printf("->[%s] attempting connection", address)
+	if err := cm.ourself.createConnection(cm.localAddr, address, acceptNewPeer, cm.logger); err != nil {
+		cm.logger.Printf("->[%s] error during connection attempt: %v", address, err)
 		cm.connectionAborted(address, err)
 	}
 }

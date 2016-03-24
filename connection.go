@@ -76,13 +76,14 @@ type LocalConnection struct {
 	errorChan       chan<- error
 	finished        <-chan struct{} // closed to signal that actorLoop has finished
 	senders         *gossipSenders
+	logger          *log.Logger
 }
 
 // If the connection is successful, it will end up in the local peer's
 // connections map.
-func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool) {
+func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool, logger *log.Logger) {
 	if connRemote.local != router.Ourself.Peer {
-		log.Fatal("Attempt to create local connection from a peer which is not ourself")
+		panic("attempt to create local connection from a peer which is not ourself")
 	}
 	actionChan := make(chan connectionAction, ChannelSize)
 	errorChan := make(chan error, 1)
@@ -96,6 +97,7 @@ func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, ro
 		actionChan:       actionChan,
 		errorChan:        errorChan,
 		finished:         finished,
+		logger:           logger,
 	}
 	conn.senders = newGossipSenders(conn, finished)
 	go conn.run(actionChan, errorChan, finished, acceptNewPeer)
@@ -377,14 +379,14 @@ func (conn *LocalConnection) actorLoop(actionChan <-chan connectionAction, error
 
 func (conn *LocalConnection) teardown(err error) {
 	if conn.remote == nil {
-		log.Printf("->[%s] connection shutting down due to error during handshake: %v", conn.remoteTCPAddr, err)
+		conn.logger.Printf("->[%s] connection shutting down due to error during handshake: %v", conn.remoteTCPAddr, err)
 	} else {
 		conn.log("connection shutting down due to error:", err)
 	}
 
 	if conn.tcpConn != nil {
 		if err := conn.tcpConn.Close(); err != nil {
-			log.Printf("warning: %v", err)
+			conn.logger.Printf("warning: %v", err)
 		}
 	}
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"io"
-	"log"
 	"math/rand"
 	"sync"
 )
@@ -521,7 +520,7 @@ func (peers *Peers) applyDecodedUpdate(decodedUpdate []*Peer, decodedConns [][]c
 
 func (peer *Peer) encode(enc *gob.Encoder) {
 	if err := enc.Encode(peer.peerSummary); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	connSummaries := []connectionSummary{}
@@ -535,7 +534,7 @@ func (peer *Peer) encode(enc *gob.Encoder) {
 	}
 
 	if err := enc.Encode(connSummaries); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 }
 

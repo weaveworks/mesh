@@ -79,7 +79,7 @@ func (peer *localPeer) ConnectionsTo(names []PeerName) []Connection {
 // createConnection creates a new connection, originating from
 // localAddr, to peerAddr. If acceptNewPeer is false, peerAddr must
 // already be a member of the mesh.
-func (peer *localPeer) createConnection(localAddr string, peerAddr string, acceptNewPeer bool) error {
+func (peer *localPeer) createConnection(localAddr string, peerAddr string, acceptNewPeer bool, logger *log.Logger) error {
 	if err := peer.checkConnectionLimit(); err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func (peer *localPeer) createConnection(localAddr string, peerAddr string, accep
 		return err
 	}
 	connRemote := newRemoteConnection(peer.Peer, nil, tcpConn.RemoteAddr().String(), true, false)
-	startLocalConnection(connRemote, tcpConn, peer.router, acceptNewPeer)
+	startLocalConnection(connRemote, tcpConn, peer.router, acceptNewPeer, logger)
 	return nil
 }
 
@@ -150,10 +150,10 @@ func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
 
 func (peer *localPeer) handleAddConnection(conn ourConnection) error {
 	if peer.Peer != conn.getLocal() {
-		log.Fatal("Attempt made to add connection to peer where peer is not the source of connection")
+		panic("Attempt made to add connection to peer where peer is not the source of connection")
 	}
 	if conn.Remote() == nil {
-		log.Fatal("Attempt made to add connection to peer with unknown remote peer")
+		panic("Attempt made to add connection to peer with unknown remote peer")
 	}
 	toName := conn.Remote().Name
 	dupErr := fmt.Errorf("Multiple connections to %s added to %s", conn.Remote(), peer.String())
@@ -196,7 +196,7 @@ func (peer *localPeer) handleAddConnection(conn ourConnection) error {
 
 func (peer *localPeer) handleConnectionEstablished(conn ourConnection) {
 	if peer.Peer != conn.getLocal() {
-		log.Fatal("Peer informed of active connection where peer is not the source of connection")
+		panic("Peer informed of active connection where peer is not the source of connection")
 	}
 	if dupConn, found := peer.connections[conn.Remote().Name]; !found || conn != dupConn {
 		conn.shutdown(fmt.Errorf("Cannot set unknown connection active"))
@@ -211,10 +211,10 @@ func (peer *localPeer) handleConnectionEstablished(conn ourConnection) {
 
 func (peer *localPeer) handleDeleteConnection(conn ourConnection) {
 	if peer.Peer != conn.getLocal() {
-		log.Fatal("Attempt made to delete connection from peer where peer is not the source of connection")
+		panic("Attempt made to delete connection from peer where peer is not the source of connection")
 	}
 	if conn.Remote() == nil {
-		log.Fatal("Attempt made to delete connection to peer with unknown remote peer")
+		panic("Attempt made to delete connection to peer with unknown remote peer")
 	}
 	toName := conn.Remote().Name
 	if connFound, found := peer.connections[toName]; !found || connFound != conn {

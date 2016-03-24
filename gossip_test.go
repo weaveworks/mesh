@@ -2,6 +2,8 @@ package mesh
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
 	"sync"
 	"testing"
 
@@ -22,7 +24,7 @@ var _ gossipConnection = &mockGossipConnection{}
 
 func newTestRouter(name string) *Router {
 	peerName, _ := PeerNameFromString(name)
-	router := NewRouter(Config{}, peerName, "nick", nil)
+	router := NewRouter(Config{}, peerName, "nick", nil, log.New(ioutil.Discard, "", 0))
 	router.Start()
 	return router
 }
@@ -74,7 +76,7 @@ func (router *Router) newTestGossipConnection(r *Router) *mockGossipConnection {
 	toPeer = router.Peers.fetchWithDefault(toPeer) // Has side-effect of incrementing refcount
 
 	conn := &mockGossipConnection{
-		remoteConnection: remoteConnection{router.Ourself.Peer, toPeer, "", false, true},
+		remoteConnection: *newRemoteConnection(router.Ourself.Peer, toPeer, "", false, true),
 		dest:             r,
 		start:            make(chan struct{}),
 	}
