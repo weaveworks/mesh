@@ -103,7 +103,7 @@ func (peer *localPeer) createConnection(localAddr string, peerAddr string, accep
 // ACTOR client API
 
 // Synchronous.
-func (peer *localPeer) doAddConnection(conn LConnection) error {
+func (peer *localPeer) doAddConnection(conn ourConnection) error {
 	resultChan := make(chan error)
 	peer.actionChan <- func() {
 		resultChan <- peer.handleAddConnection(conn)
@@ -112,14 +112,14 @@ func (peer *localPeer) doAddConnection(conn LConnection) error {
 }
 
 // Asynchronous.
-func (peer *localPeer) doConnectionEstablished(conn LConnection) {
+func (peer *localPeer) doConnectionEstablished(conn ourConnection) {
 	peer.actionChan <- func() {
 		peer.handleConnectionEstablished(conn)
 	}
 }
 
 // Synchronous.
-func (peer *localPeer) doDeleteConnection(conn LConnection) {
+func (peer *localPeer) doDeleteConnection(conn ourConnection) {
 	resultChan := make(chan interface{})
 	peer.actionChan <- func() {
 		peer.handleDeleteConnection(conn)
@@ -148,7 +148,7 @@ func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
 	}
 }
 
-func (peer *localPeer) handleAddConnection(conn LConnection) error {
+func (peer *localPeer) handleAddConnection(conn ourConnection) error {
 	if peer.Peer != conn.getLocal() {
 		log.Fatal("Attempt made to add connection to peer where peer is not the source of connection")
 	}
@@ -162,17 +162,17 @@ func (peer *localPeer) handleAddConnection(conn LConnection) error {
 		if dupConn == conn {
 			return nil
 		}
-		dupLConn := dupConn.(LConnection)
-		switch conn.breakTie(dupLConn) {
+		dupOurConn := dupConn.(ourConnection)
+		switch conn.breakTie(dupOurConn) {
 		case tieBreakWon:
-			dupLConn.shutdown(dupErr)
-			peer.handleDeleteConnection(dupLConn)
+			dupOurConn.shutdown(dupErr)
+			peer.handleDeleteConnection(dupOurConn)
 		case tieBreakLost:
 			return dupErr
 		case tieBreakTied:
 			// oh good grief. Sod it, just kill both of them.
-			dupLConn.shutdown(dupErr)
-			peer.handleDeleteConnection(dupLConn)
+			dupOurConn.shutdown(dupErr)
+			peer.handleDeleteConnection(dupOurConn)
 			return dupErr
 		}
 	}
@@ -194,7 +194,7 @@ func (peer *localPeer) handleAddConnection(conn LConnection) error {
 	return nil
 }
 
-func (peer *localPeer) handleConnectionEstablished(conn LConnection) {
+func (peer *localPeer) handleConnectionEstablished(conn ourConnection) {
 	if peer.Peer != conn.getLocal() {
 		log.Fatal("Peer informed of active connection where peer is not the source of connection")
 	}
@@ -209,7 +209,7 @@ func (peer *localPeer) handleConnectionEstablished(conn LConnection) {
 	peer.broadcastPeerUpdate()
 }
 
-func (peer *localPeer) handleDeleteConnection(conn LConnection) {
+func (peer *localPeer) handleDeleteConnection(conn ourConnection) {
 	if peer.Peer != conn.getLocal() {
 		log.Fatal("Attempt made to delete connection from peer where peer is not the source of connection")
 	}

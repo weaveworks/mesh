@@ -27,7 +27,7 @@ func newTestRouter(name string) *Router {
 	return router
 }
 
-func (conn *mockGossipConnection) breakTie(dupConn LConnection) connectionTieBreak {
+func (conn *mockGossipConnection) breakTie(dupConn ourConnection) connectionTieBreak {
 	return tieBreakTied
 }
 
@@ -88,7 +88,7 @@ func (router *Router) DeleteTestGossipConnection(r *Router) {
 	toName := r.Ourself.Peer.Name
 	conn, _ := router.Ourself.ConnectionTo(toName)
 	router.Peers.dereference(conn.Remote())
-	router.Ourself.handleDeleteConnection(conn.(LConnection))
+	router.Ourself.handleDeleteConnection(conn.(ourConnection))
 }
 
 // Create a Peer representing the receiver router, with connections to

@@ -19,12 +19,11 @@ type Connection interface {
 	isEstablished() bool
 }
 
-type LConnection interface {
+type ourConnection interface {
 	Connection
 
-	breakTie(LConnection) connectionTieBreak
+	breakTie(ourConnection) connectionTieBreak
 	shutdown(error)
-
 	log(args ...interface{})
 }
 
@@ -106,7 +105,7 @@ func (conn *LocalConnection) log(args ...interface{}) {
 	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
-func (conn *LocalConnection) breakTie(dupConn LConnection) connectionTieBreak {
+func (conn *LocalConnection) breakTie(dupConn ourConnection) connectionTieBreak {
 	dupConnLocal := dupConn.(*LocalConnection)
 	// conn.uid is used as the tie breaker here, in the knowledge that
 	// both sides will make the same decision.
