@@ -14,10 +14,15 @@ type Connection interface {
 	Remote() *Peer
 
 	getLocal() *Peer
-	breakTie(Connection) connectionTieBreak
 	remoteTCPAddress() string
 	isOutbound() bool
 	isEstablished() bool
+}
+
+type ourConnection interface {
+	Connection
+
+	breakTie(ourConnection) connectionTieBreak
 	shutdown(error)
 	log(args ...interface{})
 }
@@ -46,19 +51,11 @@ func (conn *remoteConnection) Remote() *Peer { return conn.remote }
 
 func (conn *remoteConnection) getLocal() *Peer { return conn.local }
 
-func (conn *remoteConnection) breakTie(Connection) connectionTieBreak { return tieBreakTied }
-
 func (conn *remoteConnection) remoteTCPAddress() string { return conn.remoteTCPAddr }
 
 func (conn *remoteConnection) isOutbound() bool { return conn.outbound }
 
 func (conn *remoteConnection) isEstablished() bool { return conn.established }
-
-func (conn *remoteConnection) shutdown(error) {}
-
-func (conn *remoteConnection) log(args ...interface{}) {
-	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
-}
 
 // LocalConnection is the local (our) side of a connection.
 // It implements ProtocolSender, and manages per-channel GossipSenders.
@@ -104,7 +101,11 @@ func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, ro
 	go conn.run(actionChan, errorChan, finished, acceptNewPeer)
 }
 
-func (conn *LocalConnection) breakTie(dupConn Connection) connectionTieBreak {
+func (conn *LocalConnection) log(args ...interface{}) {
+	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
+}
+
+func (conn *LocalConnection) breakTie(dupConn ourConnection) connectionTieBreak {
 	dupConnLocal := dupConn.(*LocalConnection)
 	// conn.uid is used as the tie breaker here, in the knowledge that
 	// both sides will make the same decision.
