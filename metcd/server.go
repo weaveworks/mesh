@@ -8,33 +8,92 @@ import (
 	"time"
 
 	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
+	"github.com/coreos/etcd/etcdserver/etcdserverpb"
 	"github.com/coreos/etcd/raft/raftpb"
 
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/meshconn"
 )
 
-// NewServer returns a gRPC server that implements the etcd V3 API.
-// It uses the passed mesh components to create and manage the Raft transport.
+// Server collects the etcd V3 server interfaces that we implement.
+type Server interface {
+	//etcdserverpb.AuthServer
+	//etcdserverpb.ClusterServer
+	etcdserverpb.KVServer
+	//etcdserverpb.LeaseServer
+	//etcdserverpb.MaintenanceServer
+	//etcdserverpb.WatchServer
+}
+
+// GRPCServer converts a metcd.Server to a *grpc.Server.
+func GRPCServer(s Server, options ...wackygrpc.ServerOption) *wackygrpc.Server {
+	srv := wackygrpc.NewServer(options...)
+	//etcdserverpb.RegisterAuthServer(srv, s)
+	//etcdserverpb.RegisterClusterServer(srv, s)
+	etcdserverpb.RegisterKVServer(srv, s)
+	//etcdserverpb.RegisterLeaseServer(srv, s)
+	//etcdserverpb.RegisterMaintenanceServer(srv, s)
+	//etcdserverpb.RegisterWatchServer(srv, s)
+	return srv
+}
+
+// NewServer returns a Server that (partially) implements the etcd V3 API.
+// It uses the passed mesh components to act as the Raft transport.
 // For the moment, it blocks until the mesh has minPeerCount peers.
-// (This responsibility should instead be given to the caller.)
+// (This responsibility should rather be given to the caller.)
 func NewServer(
 	router *mesh.Router,
 	peer *meshconn.Peer,
 	minPeerCount int,
 	logger *log.Logger,
-) *wackygrpc.Server {
-	c := make(chan *wackygrpc.Server)
-	go grpcManager(router, peer, minPeerCount, logger, c)
+) Server {
+	c := make(chan Server)
+	go serverManager(router, peer, minPeerCount, logger, c)
 	return <-c
 }
 
-func grpcManager(
+// NewDefaultServer is like NewServer, but we take care of creating a
+// mesh.Router and meshconn.Peer for you, with sane defaults. If you need more
+// fine-grained control, create the components yourself and use NewServer.
+func NewDefaultServer(minPeerCount int, logger *log.Logger) Server {
+	var (
+		peerName = mustPeerName()
+		nickName = mustHostname()
+		host     = "0.0.0.0"
+		port     = 6379
+		password = ""
+		channel  = "metcd"
+	)
+	router := mesh.NewRouter(mesh.Config{
+		Host:               host,
+		Port:               port,
+		ProtocolMinVersion: mesh.ProtocolMinVersion,
+		Password:           []byte(password),
+		ConnLimit:          64,
+		PeerDiscovery:      true,
+		TrustedSubnets:     []*net.IPNet{},
+	}, peerName, nickName, mesh.NullOverlay{}, logger)
+
+	// Create a meshconn.Peer and connect it to a channel.
+	peer := meshconn.NewPeer(router.Ourself.Peer.Name, router.Ourself.UID, logger)
+	gossip := router.NewGossip(channel, peer)
+	peer.Register(gossip)
+
+	// Start the router and join the mesh.
+	// Note that we don't ever stop the router.
+	// This may or may not be a problem.
+	// TODO(pb): determine if this is a super huge problem
+	router.Start()
+
+	return NewServer(router, peer, minPeerCount, logger)
+}
+
+func serverManager(
 	router *mesh.Router,
 	peer *meshconn.Peer,
 	minPeerCount int,
 	logger *log.Logger,
-	out chan<- *wackygrpc.Server,
+	out chan<- Server,
 ) {
 	// Identify mesh peers to either create or join a cluster.
 	// This algorithm is presently completely insufficient.
@@ -102,11 +161,8 @@ func grpcManager(
 	ctrl := newCtrl(self, others, minPeerCount, incomingc, outgoingc, unreachablec, confchangec, snapshotc, entryc, proposalc, removedc, logger)
 	defer ctrl.stop()
 
-	// Create the gRPC server, wrapping the store. This is what gets returned to
-	// the user. But, we can shut it down in certain circumstances.
-	server := grpcServer(store)
-	defer server.Stop()
-	out <- server
+	// TODO(pb)
+	out <- store
 
 	errc := make(chan error)
 	go func() {
@@ -118,42 +174,6 @@ func grpcManager(
 		errc <- fmt.Errorf("the Raft cluster got too small")
 	}()
 	logger.Print(<-errc)
-}
-
-// NewDefaultServer is like NewServer, but we take care of creating a mesh.Router
-// and meshconn.Peer for you, using sane defaults. If you need more fine-grained
-// control, create these components yourself and use NewServer.
-func NewDefaultServer(minPeerCount int, logger *log.Logger) *wackygrpc.Server {
-	var (
-		peerName = mustPeerName()
-		nickName = mustHostname()
-		host     = "0.0.0.0"
-		port     = 6379
-		password = ""
-		channel  = "metcd"
-	)
-	router := mesh.NewRouter(mesh.Config{
-		Host:               host,
-		Port:               port,
-		ProtocolMinVersion: mesh.ProtocolMinVersion,
-		Password:           []byte(password),
-		ConnLimit:          64,
-		PeerDiscovery:      true,
-		TrustedSubnets:     []*net.IPNet{},
-	}, peerName, nickName, mesh.NullOverlay{}, logger)
-
-	// Create a meshconn.Peer and connect it to a channel.
-	peer := meshconn.NewPeer(router.Ourself.Peer.Name, router.Ourself.UID, logger)
-	gossip := router.NewGossip(channel, peer)
-	peer.Register(gossip)
-
-	// Start the router and join the mesh.
-	// Note that we don't ever stop the router.
-	// This may or may not be a problem.
-	// TODO(pb): determine if this is a super huge problem
-	router.Start()
-
-	return NewServer(router, peer, minPeerCount, logger)
 }
 
 func translateVia(router *mesh.Router) peerTranslator {

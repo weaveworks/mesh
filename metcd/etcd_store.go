@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"os"
 	"sort"
 
 	wackyproto "github.com/coreos/etcd/Godeps/_workspace/src/github.com/gogo/protobuf/proto"
 	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
-	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
 	"github.com/coreos/etcd/etcdserver/etcdserverpb"
 	"github.com/coreos/etcd/lease"
 	"github.com/coreos/etcd/raft/raftpb"
@@ -20,26 +18,6 @@ import (
 	"github.com/coreos/etcd/storage/backend"
 	"github.com/coreos/etcd/storage/storagepb"
 )
-
-func grpcServer(s *etcdStore, options ...wackygrpc.ServerOption) *wackygrpc.Server {
-	srv := wackygrpc.NewServer(options...)
-	//etcdserverpb.RegisterAuthServer(srv, s)
-	//etcdserverpb.RegisterClusterServer(srv, s)
-	etcdserverpb.RegisterKVServer(srv, s)
-	//etcdserverpb.RegisterLeaseServer(srv, s)
-	//etcdserverpb.RegisterMaintenanceServer(srv, s)
-	//etcdserverpb.RegisterWatchServer(srv, s)
-	return srv
-}
-
-// Like http.ListenAndServe. Blocks forever.
-func grpcListenAndServe(addr string, server *wackygrpc.Server) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	return server.Serve(ln)
-}
 
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver. The original
 // is unsuitable because it is tightly coupled to persistent storage, an HTTP
@@ -62,6 +40,8 @@ type etcdStore struct {
 	idgen   <-chan uint64
 	pending map[uint64]responseChans
 }
+
+var _ Server = &etcdStore{}
 
 func newEtcdStore(
 	proposalc chan<- []byte,
