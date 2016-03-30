@@ -103,8 +103,11 @@ func main() {
 		errc <- fmt.Errorf("%s", <-c)
 	}()
 	go func() {
+		metcdServer := metcd.NewServer(router, peer, *n, logger)
+		grpcServer := metcd.GRPCServer(metcdServer)
+		defer grpcServer.Stop()
 		logger.Printf("gRPC listening at %s", *apiListen)
-		errc <- metcd.NewServer(router, peer, *n, logger).Serve(ln)
+		errc <- grpcServer.Serve(ln)
 	}()
 	logger.Print(<-errc)
 }
