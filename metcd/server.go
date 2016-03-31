@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	wackygrpc "github.com/coreos/etcd/Godeps/_workspace/src/google.golang.org/grpc"
 	"github.com/coreos/etcd/etcdserver/etcdserverpb"
 	"github.com/coreos/etcd/raft/raftpb"
+	"google.golang.org/grpc"
 
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/meshconn"
@@ -26,8 +26,8 @@ type Server interface {
 }
 
 // GRPCServer converts a metcd.Server to a *grpc.Server.
-func GRPCServer(s Server, options ...wackygrpc.ServerOption) *wackygrpc.Server {
-	srv := wackygrpc.NewServer(options...)
+func GRPCServer(s Server, options ...grpc.ServerOption) *grpc.Server {
+	srv := grpc.NewServer(options...)
 	//etcdserverpb.RegisterAuthServer(srv, s)
 	//etcdserverpb.RegisterClusterServer(srv, s)
 	etcdserverpb.RegisterKVServer(srv, s)
