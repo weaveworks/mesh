@@ -7,9 +7,9 @@ import (
 	"net"
 	"time"
 
-	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
 	"github.com/coreos/etcd/raft"
 	"github.com/coreos/etcd/raft/raftpb"
+	"golang.org/x/net/context"
 
 	"github.com/weaveworks/mesh/meshconn"
 )
@@ -155,7 +155,7 @@ func (c *ctrl) driveRaft() {
 			}
 
 		case msg := <-c.incomingc:
-			c.node.Step(wackycontext.TODO(), msg)
+			c.node.Step(context.TODO(), msg)
 
 		case id := <-c.unreachablec:
 			c.node.ReportUnreachable(id)
@@ -184,7 +184,7 @@ func (c *ctrl) driveProposals(cancel <-chan struct{}) {
 				c.proposalc = nil
 				continue
 			}
-			c.node.Propose(wackycontext.TODO(), data)
+			c.node.Propose(context.TODO(), data)
 
 		case cc, ok := <-c.confchangec:
 			if !ok {
@@ -193,7 +193,7 @@ func (c *ctrl) driveProposals(cancel <-chan struct{}) {
 				continue
 			}
 			c.logger.Printf("ctrl: ProposeConfChange %s %x", cc.Type, cc.NodeID)
-			c.node.ProposeConfChange(wackycontext.TODO(), cc)
+			c.node.ProposeConfChange(context.TODO(), cc)
 
 		case <-cancel:
 			return

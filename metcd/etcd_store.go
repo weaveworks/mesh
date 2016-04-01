@@ -9,14 +9,14 @@ import (
 	"os"
 	"sort"
 
-	wackyproto "github.com/coreos/etcd/Godeps/_workspace/src/github.com/gogo/protobuf/proto"
-	wackycontext "github.com/coreos/etcd/Godeps/_workspace/src/golang.org/x/net/context"
 	"github.com/coreos/etcd/etcdserver/etcdserverpb"
 	"github.com/coreos/etcd/lease"
 	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/coreos/etcd/storage"
 	"github.com/coreos/etcd/storage/backend"
 	"github.com/coreos/etcd/storage/storagepb"
+	"github.com/gogo/protobuf/proto"
+	"golang.org/x/net/context"
 )
 
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver. The original
@@ -91,7 +91,7 @@ func newEtcdStore(
 
 // Range implements gRPC KVServer.
 // Range gets the keys in the range from the store.
-func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
+func (s *etcdStore) Range(ctx context.Context, req *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Range: req}
 	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
@@ -114,7 +114,7 @@ func (s *etcdStore) Range(ctx wackycontext.Context, req *etcdserverpb.RangeReque
 // Put puts the given key into the store.
 // A put request increases the revision of the store,
 // and generates one event in the event history.
-func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
+func (s *etcdStore) Put(ctx context.Context, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Put: req}
 	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
@@ -137,7 +137,7 @@ func (s *etcdStore) Put(ctx wackycontext.Context, req *etcdserverpb.PutRequest) 
 // Delete deletes the given range from the store.
 // A delete request increase the revision of the store,
 // and generates one event in the event history.
-func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
+func (s *etcdStore) DeleteRange(ctx context.Context, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, DeleteRange: req}
 	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
@@ -161,7 +161,7 @@ func (s *etcdStore) DeleteRange(ctx wackycontext.Context, req *etcdserverpb.Dele
 // A txn request increases the revision of the store,
 // and generates events with the same revision in the event history.
 // It is not allowed to modify the same key several times within one txn.
-func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
+func (s *etcdStore) Txn(ctx context.Context, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
 	ireq := etcdserverpb.InternalRaftRequest{ID: <-s.idgen, Txn: req}
 	msgc, errc, err := s.proposeInternalRaftRequest(ireq)
 	if err != nil {
@@ -183,7 +183,7 @@ func (s *etcdStore) Txn(ctx wackycontext.Context, req *etcdserverpb.TxnRequest) 
 // Compact implements gRPC KVServer.
 // Compact compacts the event history in s. User should compact the
 // event history periodically, or it will grow infinitely.
-func (s *etcdStore) Compact(ctx wackycontext.Context, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
+func (s *etcdStore) Compact(ctx context.Context, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
 	// We don't have snapshotting yet, so compact just puts us in a bad state.
 	// TODO(pb): fix this when we implement snapshotting.
 	return nil, errors.New("not implemented")
@@ -193,7 +193,7 @@ func (s *etcdStore) Compact(ctx wackycontext.Context, req *etcdserverpb.Compacti
 // Hash returns the hash of local KV state for consistency checking purpose.
 // This is designed for testing purpose. Do not use this in production when there
 // are ongoing transactions.
-func (s *etcdStore) Hash(ctx wackycontext.Context, req *etcdserverpb.HashRequest) (*etcdserverpb.HashResponse, error) {
+func (s *etcdStore) Hash(ctx context.Context, req *etcdserverpb.HashRequest) (*etcdserverpb.HashResponse, error) {
 	h, err := s.kv.Hash()
 	if err != nil {
 		return nil, err
@@ -253,7 +253,7 @@ var (
 )
 
 type responseChans struct {
-	msgc chan<- wackyproto.Message
+	msgc chan<- proto.Message
 	errc chan<- error
 }
 
@@ -347,7 +347,7 @@ func (s *etcdStore) applyCommittedEntry(entry raftpb.Entry) error {
 }
 
 // From public API method to proposalc.
-func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (<-chan wackyproto.Message, <-chan error, error) {
+func (s *etcdStore) proposeInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (<-chan proto.Message, <-chan error, error) {
 	data, err := req.Marshal()
 	if err != nil {
 		return nil, nil, err
@@ -369,7 +369,7 @@ func (s *etcdStore) cancelInternalRaftRequest(req etcdserverpb.InternalRaftReque
 
 // From committed entryc, back to public API method.
 // etcdserver/v3demo_server.go applyV3Result
-func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (wackyproto.Message, error) {
+func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftRequest) (proto.Message, error) {
 	switch {
 	case req.Range != nil:
 		return applyRange(noTxn, s.kv, req.Range)
@@ -390,17 +390,17 @@ func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftReques
 	}
 }
 
-func (s *etcdStore) registerPending(id uint64) (<-chan wackyproto.Message, <-chan error, error) {
+func (s *etcdStore) registerPending(id uint64) (<-chan proto.Message, <-chan error, error) {
 	if _, ok := s.pending[id]; ok {
 		return nil, nil, fmt.Errorf("pending ID %d already registered", id)
 	}
-	msgc := make(chan wackyproto.Message)
+	msgc := make(chan proto.Message)
 	errc := make(chan error)
 	s.pending[id] = responseChans{msgc, errc}
 	return msgc, errc, nil
 }
 
-func (s *etcdStore) signalPending(id uint64, msg wackyproto.Message) {
+func (s *etcdStore) signalPending(id uint64, msg proto.Message) {
 	rc, ok := s.pending[id]
 	if !ok {
 		// InternalRaftRequests are replicated via Raft. So all peers will invoke this
@@ -805,7 +805,7 @@ func compareInt64(a, b int64) int {
 func applyCompaction(kv storage.KV, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
 	resp := &etcdserverpb.CompactionResponse{}
 	resp.Header = &etcdserverpb.ResponseHeader{}
-	err := kv.Compact(req.Revision)
+	_, err := kv.Compact(req.Revision)
 	if err != nil {
 		return nil, err
 	}
