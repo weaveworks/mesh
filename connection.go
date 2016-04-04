@@ -202,6 +202,7 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 	if err = conn.registerRemote(remote, acceptNewPeer); err != nil {
 		return
 	}
+	isRestartedPeer := conn.Remote().UID != remote.UID
 
 	conn.log("connection ready; using protocol version", conn.version)
 
@@ -228,7 +229,7 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 	// As soon as we do AddConnection, the new connection becomes
 	// visible to the packet routing logic.  So AddConnection must
 	// come after PrepareConnection
-	if err = conn.router.Ourself.doAddConnection(conn); err != nil {
+	if err = conn.router.Ourself.doAddConnection(conn, isRestartedPeer); err != nil {
 		return
 	}
 	conn.router.ConnectionMaker.connectionCreated(conn)
