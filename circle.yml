@@ -1,5 +1,4 @@
 test:
   pre:
-    - rm -rf $GOPATH/src/github.com/coreos/etcd/vendor # https://github.com/coreos/etcd/issues/4913
     - ./lint
 
