@@ -381,8 +381,8 @@ func (s *etcdStore) applyInternalRaftRequest(req etcdserverpb.InternalRaftReques
 		return applyTransaction(s.kv, s.lessor, req.Txn)
 	case req.Compaction != nil:
 		return applyCompaction(s.kv, req.Compaction)
-	case req.LeaseCreate != nil:
-		return applyLeaseCreate(s.lessor, req.LeaseCreate)
+	case req.LeaseGrant != nil:
+		return applyLeaseGrant(s.lessor, req.LeaseGrant)
 	case req.LeaseRevoke != nil:
 		return applyLeaseRevoke(s.lessor, req.LeaseRevoke)
 	default:
@@ -814,9 +814,9 @@ func applyCompaction(kv storage.KV, req *etcdserverpb.CompactionRequest) (*etcds
 	return resp, err
 }
 
-func applyLeaseCreate(lessor lease.Lessor, req *etcdserverpb.LeaseCreateRequest) (*etcdserverpb.LeaseCreateResponse, error) {
+func applyLeaseGrant(lessor lease.Lessor, req *etcdserverpb.LeaseGrantRequest) (*etcdserverpb.LeaseGrantResponse, error) {
 	l, err := lessor.Grant(lease.LeaseID(req.ID), req.TTL)
-	resp := &etcdserverpb.LeaseCreateResponse{}
+	resp := &etcdserverpb.LeaseGrantResponse{}
 	if err == nil {
 		resp.ID = int64(l.ID)
 		resp.TTL = l.TTL

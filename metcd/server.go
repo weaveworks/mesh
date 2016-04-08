@@ -41,21 +41,30 @@ func GRPCServer(s Server, options ...grpc.ServerOption) *grpc.Server {
 // It uses the passed mesh components to act as the Raft transport.
 // For the moment, it blocks until the mesh has minPeerCount peers.
 // (This responsibility should rather be given to the caller.)
+// The server can be terminated by certain conditions in the cluster.
+// If that happens, terminatedc signaled, and the server is invalid.
 func NewServer(
 	router *mesh.Router,
 	peer *meshconn.Peer,
 	minPeerCount int,
+	terminatec <-chan struct{},
+	terminatedc chan<- error,
 	logger *log.Logger,
 ) Server {
 	c := make(chan Server)
-	go serverManager(router, peer, minPeerCount, logger, c)
+	go serverManager(router, peer, minPeerCount, terminatec, terminatedc, logger, c)
 	return <-c
 }
 
 // NewDefaultServer is like NewServer, but we take care of creating a
 // mesh.Router and meshconn.Peer for you, with sane defaults. If you need more
 // fine-grained control, create the components yourself and use NewServer.
-func NewDefaultServer(minPeerCount int, logger *log.Logger) Server {
+func NewDefaultServer(
+	minPeerCount int,
+	terminatec <-chan struct{},
+	terminatedc chan<- error,
+	logger *log.Logger,
+) Server {
 	var (
 		peerName = mustPeerName()
 		nickName = mustHostname()
@@ -85,13 +94,15 @@ func NewDefaultServer(minPeerCount int, logger *log.Logger) Server {
 	// TODO(pb): determine if this is a super huge problem
 	router.Start()
 
-	return NewServer(router, peer, minPeerCount, logger)
+	return NewServer(router, peer, minPeerCount, terminatec, terminatedc, logger)
 }
 
 func serverManager(
 	router *mesh.Router,
 	peer *meshconn.Peer,
 	minPeerCount int,
+	terminatec <-chan struct{},
+	terminatedc chan<- error,
 	logger *log.Logger,
 	out chan<- Server,
 ) {
@@ -161,10 +172,14 @@ func serverManager(
 	ctrl := newCtrl(self, others, minPeerCount, incomingc, outgoingc, unreachablec, confchangec, snapshotc, entryc, proposalc, removedc, logger)
 	defer ctrl.stop()
 
-	// TODO(pb)
+	// Return the store to the client.
 	out <- store
 
 	errc := make(chan error)
+	go func() {
+		<-terminatec
+		errc <- fmt.Errorf("metcd server terminated by user request")
+	}()
 	go func() {
 		<-removedc
 		errc <- fmt.Errorf("the Raft peer was removed from the cluster")
@@ -173,7 +188,7 @@ func serverManager(
 		<-shrunkc
 		errc <- fmt.Errorf("the Raft cluster got too small")
 	}()
-	logger.Print(<-errc)
+	terminatedc <- <-errc
 }
 
 func translateVia(router *mesh.Router) peerTranslator {

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/meshconn"
@@ -68,7 +69,7 @@ func main() {
 	defer logger.Printf("goodbye!")
 
 	// Create, but do not start, a router.
-	log.SetOutput(ioutil.Discard) // no log from mesh.Router please
+	meshLogger := log.New(ioutil.Discard, "", 0) // no log from mesh please
 	router := mesh.NewRouter(mesh.Config{
 		Host:               host,
 		Port:               port,
@@ -77,7 +78,7 @@ func main() {
 		ConnLimit:          64,
 		PeerDiscovery:      true,
 		TrustedSubnets:     []*net.IPNet{},
-	}, name, *nickname, mesh.NullOverlay{}, logger)
+	}, name, *nickname, mesh.NullOverlay{}, meshLogger)
 
 	// Create a meshconn.Peer.
 	peer := meshconn.NewPeer(name, router.Ourself.UID, logger)
@@ -96,20 +97,25 @@ func main() {
 
 	router.ConnectionMaker.InitiateConnections(peers.slice(), true)
 
-	errc := make(chan error)
+	terminatec := make(chan struct{})
+	terminatedc := make(chan error)
 	go func() {
 		c := make(chan os.Signal)
 		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-		errc <- fmt.Errorf("%s", <-c)
+		sig := <-c                           // receive interrupt
+		close(terminatec)                    // terminate metcd.Server
+		<-terminatedc                        // wait for shutdown
+		terminatedc <- fmt.Errorf("%s", sig) // forward signal
 	}()
 	go func() {
-		metcdServer := metcd.NewServer(router, peer, *n, logger)
+		metcdServer := metcd.NewServer(router, peer, *n, terminatec, terminatedc, logger)
 		grpcServer := metcd.GRPCServer(metcdServer)
 		defer grpcServer.Stop()
 		logger.Printf("gRPC listening at %s", *apiListen)
-		errc <- grpcServer.Serve(ln)
+		terminatedc <- grpcServer.Serve(ln)
 	}()
-	logger.Print(<-errc)
+	logger.Print(<-terminatedc)
+	time.Sleep(time.Second) // TODO(pb): there must be a better way
 }
 
 type stringset map[string]struct{}
