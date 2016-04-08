@@ -104,7 +104,7 @@ func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, ro
 }
 
 func (conn *LocalConnection) log(args ...interface{}) {
-	log.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
+	conn.logger.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
 }
 
 func (conn *LocalConnection) breakTie(dupConn ourConnection) connectionTieBreak {
