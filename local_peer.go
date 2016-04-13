@@ -3,7 +3,6 @@ package mesh
 import (
 	"encoding/gob"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -79,7 +78,7 @@ func (peer *localPeer) ConnectionsTo(names []PeerName) []Connection {
 // createConnection creates a new connection, originating from
 // localAddr, to peerAddr. If acceptNewPeer is false, peerAddr must
 // already be a member of the mesh.
-func (peer *localPeer) createConnection(localAddr string, peerAddr string, acceptNewPeer bool, logger *log.Logger) error {
+func (peer *localPeer) createConnection(localAddr string, peerAddr string, acceptNewPeer bool, logger Logger) error {
 	if err := peer.checkConnectionLimit(); err != nil {
 		return err
 	}
@@ -183,12 +182,12 @@ func (peer *localPeer) handleAddConnection(conn ourConnection, isRestartedPeer b
 	peer.addConnection(conn)
 	switch {
 	case isRestartedPeer:
-		conn.log("connection added (restarted peer)")
+		conn.logf("connection added (restarted peer)")
 		peer.router.sendAllGossipDown(conn)
 	case isConnectedPeer:
-		conn.log("connection added")
+		conn.logf("connection added")
 	default:
-		conn.log("connection added (new peer)")
+		conn.logf("connection added (new peer)")
 		peer.router.sendAllGossipDown(conn)
 	}
 
@@ -207,7 +206,7 @@ func (peer *localPeer) handleConnectionEstablished(conn ourConnection) {
 		return
 	}
 	peer.connectionEstablished(conn)
-	conn.log("connection fully established")
+	conn.logf("connection fully established")
 
 	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
@@ -225,7 +224,7 @@ func (peer *localPeer) handleDeleteConnection(conn ourConnection) {
 		return
 	}
 	peer.deleteConnection(conn)
-	conn.log("connection deleted")
+	conn.logf("connection deleted")
 	// Must do garbage collection first to ensure we don't send out an
 	// update with unreachable peers (can cause looping)
 	peer.router.Peers.GarbageCollect()

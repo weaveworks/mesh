@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"log"
 )
 
 // gossipChannel is a logical communication channel within a physical mesh.
@@ -13,12 +12,12 @@ type gossipChannel struct {
 	ourself  *localPeer
 	routes   *routes
 	gossiper Gossiper
-	logger   *log.Logger
+	logger   Logger
 }
 
 // newGossipChannel returns a named, usable channel.
 // It delegates receiving duties to the passed Gossiper.
-func newGossipChannel(channelName string, ourself *localPeer, r *routes, g Gossiper, logger *log.Logger) *gossipChannel {
+func newGossipChannel(channelName string, ourself *localPeer, r *routes, g Gossiper, logger Logger) *gossipChannel {
 	return &gossipChannel{
 		name:     channelName,
 		ourself:  ourself,
@@ -41,7 +40,7 @@ func (c *gossipChannel) deliverUnicast(srcName PeerName, origPayload []byte, dec
 		return c.gossiper.OnGossipUnicast(srcName, payload)
 	}
 	if err := c.relayUnicast(destName, origPayload); err != nil {
-		c.log(err)
+		c.logf("%v", err)
 	}
 	return nil
 }
@@ -135,8 +134,9 @@ func (c *gossipChannel) makeBroadcastMsg(srcName PeerName, msg []byte) protocolM
 	return protocolMsg{ProtocolGossipBroadcast, gobEncode(c.name, srcName, msg)}
 }
 
-func (c *gossipChannel) log(args ...interface{}) {
-	c.logger.Println(append(append([]interface{}{}, "[gossip "+c.name+"]:"), args...)...)
+func (c *gossipChannel) logf(format string, args ...interface{}) {
+	format = "[gossip " + c.name + "]: " + format
+	c.logger.Printf(format, args...)
 }
 
 // GobEncode gob-encodes each item and returns the resulting byte slice.
