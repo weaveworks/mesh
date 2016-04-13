@@ -2,7 +2,6 @@ package metcd
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"time"
@@ -49,7 +48,7 @@ func NewServer(
 	minPeerCount int,
 	terminatec <-chan struct{},
 	terminatedc chan<- error,
-	logger *log.Logger,
+	logger mesh.Logger,
 ) Server {
 	c := make(chan Server)
 	go serverManager(router, peer, minPeerCount, terminatec, terminatedc, logger, c)
@@ -63,7 +62,7 @@ func NewDefaultServer(
 	minPeerCount int,
 	terminatec <-chan struct{},
 	terminatedc chan<- error,
-	logger *log.Logger,
+	logger mesh.Logger,
 ) Server {
 	var (
 		peerName = mustPeerName()
@@ -103,7 +102,7 @@ func serverManager(
 	minPeerCount int,
 	terminatec <-chan struct{},
 	terminatedc chan<- error,
-	logger *log.Logger,
+	logger mesh.Logger,
 	out chan<- Server,
 ) {
 	// Identify mesh peers to either create or join a cluster.

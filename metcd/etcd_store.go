@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"sort"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/coreos/etcd/storage/backend"
 	"github.com/coreos/etcd/storage/storagepb"
 	"github.com/gogo/protobuf/proto"
+	"github.com/weaveworks/mesh"
 	"golang.org/x/net/context"
 )
 
@@ -30,7 +30,7 @@ type etcdStore struct {
 	actionc     chan func()
 	quitc       chan struct{}
 	terminatedc chan struct{}
-	logger      *log.Logger
+	logger      mesh.Logger
 
 	dbPath string // please os.RemoveAll on exit
 	kv     storage.KV
@@ -48,7 +48,7 @@ func newEtcdStore(
 	snapshotc <-chan raftpb.Snapshot,
 	entryc <-chan raftpb.Entry,
 	confentryc chan<- raftpb.Entry,
-	logger *log.Logger,
+	logger mesh.Logger,
 ) *etcdStore {
 	// It would be much better if we could have a proper in-memory backend. Alas:
 	// backend.Backend is tightly coupled to bolt.DB, and both are tightly coupled
