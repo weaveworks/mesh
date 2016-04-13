@@ -1,7 +1,6 @@
 package metcd
 
 import (
-	"log"
 	"net"
 
 	"github.com/coreos/etcd/raft/raftpb"
@@ -19,7 +18,7 @@ type packetTransport struct {
 	incomingc    chan<- raftpb.Message // to controller
 	outgoingc    <-chan raftpb.Message // from controller
 	unreachablec chan<- uint64         // to controller
-	logger       *log.Logger
+	logger       mesh.Logger
 }
 
 func newPacketTransport(
@@ -28,7 +27,7 @@ func newPacketTransport(
 	incomingc chan<- raftpb.Message,
 	outgoingc <-chan raftpb.Message,
 	unreachablec chan<- uint64,
-	logger *log.Logger,
+	logger mesh.Logger,
 ) *packetTransport {
 	t := &packetTransport{
 		conn:         conn,

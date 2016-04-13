@@ -1,7 +1,6 @@
 package metcd
 
 import (
-	"log"
 	"time"
 
 	"github.com/coreos/etcd/raft/raftpb"
@@ -20,10 +19,10 @@ type membership struct {
 	remc     chan<- uint64   // to configurator
 	shrunkc  chan<- struct{} // to calling context
 	quitc    chan struct{}
-	logger   *log.Logger
+	logger   mesh.Logger
 }
 
-func newMembership(router *mesh.Router, initial uint64set, minCount int, addc, remc chan<- uint64, shrunkc chan<- struct{}, logger *log.Logger) *membership {
+func newMembership(router *mesh.Router, initial uint64set, minCount int, addc, remc chan<- uint64, shrunkc chan<- struct{}, logger mesh.Logger) *membership {
 	m := &membership{
 		router:   router,
 		minCount: minCount,
@@ -120,10 +119,10 @@ type configurator struct {
 	confchangec chan<- raftpb.ConfChange // to raft.Node
 	entryc      <-chan raftpb.Entry      // from raft.Node
 	quitc       chan struct{}
-	logger      *log.Logger
+	logger      mesh.Logger
 }
 
-func newConfigurator(addc, remc <-chan uint64, confchangec chan<- raftpb.ConfChange, entryc <-chan raftpb.Entry, logger *log.Logger) *configurator {
+func newConfigurator(addc, remc <-chan uint64, confchangec chan<- raftpb.ConfChange, entryc <-chan raftpb.Entry, logger mesh.Logger) *configurator {
 	c := &configurator{
 		addc:        addc,
 		remc:        remc,

@@ -3,6 +3,7 @@ package metcd
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/coreos/etcd/raft/raftpb"
 	"golang.org/x/net/context"
 
+	"github.com/weaveworks/mesh"
 	"github.com/weaveworks/mesh/meshconn"
 )
 
@@ -53,7 +55,7 @@ type ctrl struct {
 	terminatedc  chan struct{}
 	storage      *raft.MemoryStorage
 	node         raft.Node
-	logger       *log.Logger
+	logger       mesh.Logger
 }
 
 func newCtrl(
@@ -68,10 +70,10 @@ func newCtrl(
 	entryc chan<- raftpb.Entry,
 	proposalc <-chan []byte,
 	removedc chan<- struct{},
-	logger *log.Logger,
+	logger mesh.Logger,
 ) *ctrl {
 	storage := raft.NewMemoryStorage()
-	raftLogger := &raft.DefaultLogger{Logger: logger}
+	raftLogger := &raft.DefaultLogger{Logger: log.New(ioutil.Discard, "", 0)}
 	raftLogger.EnableDebug()
 	nodeConfig := &raft.Config{
 		ID:              makeRaftPeer(self).ID,
