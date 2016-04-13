@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"sync"
@@ -53,11 +52,11 @@ type Router struct {
 	gossipChannels  gossipChannels
 	topologyGossip  Gossip
 	acceptLimiter   *tokenBucket
-	logger          *log.Logger
+	logger          Logger
 }
 
 // NewRouter returns a new router. It must be started.
-func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, logger *log.Logger) *Router {
+func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, logger Logger) *Router {
 	router := &Router{Config: config, gossipChannels: make(gossipChannels)}
 
 	if overlay == nil {
@@ -68,7 +67,7 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	router.Ourself = newLocalPeer(name, nickName, router)
 	router.Peers = newPeers(router.Ourself)
 	router.Peers.OnGC(func(peer *Peer) {
-		logger.Println("Removed unreachable peer", peer)
+		logger.Printf("Removed unreachable peer %s", peer)
 	})
 	router.Routes = newRoutes(router.Ourself, router.Peers)
 	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, net.JoinHostPort(router.Host, "0"), router.Port, router.PeerDiscovery, logger)
@@ -109,7 +108,7 @@ func (router *Router) listenTCP() {
 		for {
 			tcpConn, err := ln.AcceptTCP()
 			if err != nil {
-				router.logger.Println(err)
+				router.logger.Printf("%v", err)
 				continue
 			}
 			router.acceptTCP(tcpConn)
@@ -152,7 +151,7 @@ func (router *Router) gossipChannel(channelName string) *gossipChannel {
 		return channel
 	}
 	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{}, router.logger)
-	channel.log("created surrogate channel")
+	channel.logf("created surrogate channel")
 	router.gossipChannels[channelName] = channel
 	return channel
 }

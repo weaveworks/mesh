@@ -2,7 +2,6 @@ package mesh
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"time"
@@ -28,7 +27,7 @@ type connectionMaker struct {
 	connections map[Connection]struct{}
 	directPeers peerAddrs
 	actionChan  chan<- connectionMakerAction
-	logger      *log.Logger
+	logger      Logger
 }
 
 // TargetState describes the connection state of a remote target.
@@ -58,7 +57,7 @@ type connectionMakerAction func() bool
 // peers, making outbound connections from localAddr, and listening on
 // port. If discovery is true, ConnectionMaker will attempt to
 // initiate new connections with peers it's not directly connected to.
-func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool, logger *log.Logger) *connectionMaker {
+func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool, logger Logger) *connectionMaker {
 	actionChan := make(chan connectionMakerAction, ChannelSize)
 	cm := &connectionMaker{
 		ourself:     ourself,

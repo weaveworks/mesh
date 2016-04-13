@@ -36,8 +36,12 @@ func (conn *mockGossipConnection) breakTie(dupConn ourConnection) connectionTieB
 func (conn *mockGossipConnection) shutdown(err error) {
 }
 
-func (conn *mockGossipConnection) log(args ...interface{}) {
-	fmt.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
+func (conn *mockGossipConnection) logf(format string, args ...interface{}) {
+	format = "->[" + conn.remoteTCPAddr + "|" + conn.remote.String() + "]: " + format
+	if len(format) == 0 || format[len(format)-1] != '\n' {
+		format += "\n"
+	}
+	fmt.Printf(format, args...)
 }
 
 func (conn *mockGossipConnection) SendProtocolMsg(pm protocolMsg) error {

@@ -2,7 +2,6 @@ package mesh
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"time"
@@ -24,7 +23,7 @@ type ourConnection interface {
 
 	breakTie(ourConnection) connectionTieBreak
 	shutdown(error)
-	log(args ...interface{})
+	logf(format string, args ...interface{})
 }
 
 // A local representation of the remote side of a connection.
@@ -76,12 +75,12 @@ type LocalConnection struct {
 	errorChan       chan<- error
 	finished        <-chan struct{} // closed to signal that actorLoop has finished
 	senders         *gossipSenders
-	logger          *log.Logger
+	logger          Logger
 }
 
 // If the connection is successful, it will end up in the local peer's
 // connections map.
-func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool, logger *log.Logger) {
+func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, router *Router, acceptNewPeer bool, logger Logger) {
 	if connRemote.local != router.Ourself.Peer {
 		panic("attempt to create local connection from a peer which is not ourself")
 	}
@@ -103,8 +102,9 @@ func startLocalConnection(connRemote *remoteConnection, tcpConn *net.TCPConn, ro
 	go conn.run(actionChan, errorChan, finished, acceptNewPeer)
 }
 
-func (conn *LocalConnection) log(args ...interface{}) {
-	conn.logger.Println(append(append([]interface{}{}, fmt.Sprintf("->[%s|%s]:", conn.remoteTCPAddr, conn.remote)), args...)...)
+func (conn *LocalConnection) logf(format string, args ...interface{}) {
+	format = "->[" + conn.remoteTCPAddr + "|" + conn.remote.String() + "]: " + format
+	conn.logger.Printf(format, args...)
 }
 
 func (conn *LocalConnection) breakTie(dupConn ourConnection) connectionTieBreak {
@@ -204,7 +204,7 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 	}
 	isRestartedPeer := conn.Remote().UID != remote.UID
 
-	conn.log("connection ready; using protocol version", conn.version)
+	conn.logf("connection ready; using protocol version %v", conn.version)
 
 	// only use negotiated session key for untrusted connections
 	var sessionKey *[32]byte
@@ -382,7 +382,7 @@ func (conn *LocalConnection) teardown(err error) {
 	if conn.remote == nil {
 		conn.logger.Printf("->[%s] connection shutting down due to error during handshake: %v", conn.remoteTCPAddr, err)
 	} else {
-		conn.log("connection shutting down due to error:", err)
+		conn.logf("connection shutting down due to error: %v", err)
 	}
 
 	if conn.tcpConn != nil {
@@ -432,7 +432,7 @@ func (conn *LocalConnection) receiveTCP(receiver tcpReceiver) {
 			break
 		}
 		if len(msg) < 1 {
-			conn.log("ignoring blank msg")
+			conn.logf("ignoring blank msg")
 			continue
 		}
 		if err = conn.handleProtocolMsg(protocolTag(msg[0]), msg[1:]); err != nil {
@@ -450,7 +450,7 @@ func (conn *LocalConnection) handleProtocolMsg(tag protocolTag, payload []byte) 
 	case ProtocolGossipUnicast, ProtocolGossipBroadcast, ProtocolGossip:
 		return conn.router.handleGossip(tag, payload)
 	default:
-		conn.log("ignoring unknown protocol tag:", tag)
+		conn.logf("ignoring unknown protocol tag: %v", tag)
 	}
 	return nil
 }
