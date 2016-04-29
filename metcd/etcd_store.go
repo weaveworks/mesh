@@ -10,17 +10,17 @@ import (
 
 	"github.com/coreos/etcd/etcdserver/etcdserverpb"
 	"github.com/coreos/etcd/lease"
+	"github.com/coreos/etcd/mvcc"
+	"github.com/coreos/etcd/mvcc/backend"
+	"github.com/coreos/etcd/mvcc/mvccpb"
 	"github.com/coreos/etcd/raft/raftpb"
-	"github.com/coreos/etcd/storage"
-	"github.com/coreos/etcd/storage/backend"
-	"github.com/coreos/etcd/storage/storagepb"
 	"github.com/gogo/protobuf/proto"
 	"github.com/weaveworks/mesh"
 	"golang.org/x/net/context"
 )
 
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver. The original
-// is unsuitable because it is tightly coupled to persistent storage, an HTTP
+// is unsuitable because it is tightly coupled to persistent mvcc. an HTTP
 // transport, etc. Implements selected etcd V3 API (gRPC) methods.
 type etcdStore struct {
 	proposalc   chan<- []byte
@@ -33,7 +33,7 @@ type etcdStore struct {
 	logger      mesh.Logger
 
 	dbPath string // please os.RemoveAll on exit
-	kv     storage.KV
+	kv     mvcc.KV
 	lessor lease.Lessor
 	index  *consistentIndex // see comment on type
 
@@ -65,7 +65,7 @@ func newEtcdStore(
 	b := backend.NewDefaultBackend(dbPath)
 	lessor := lease.NewLessor(b)
 	index := &consistentIndex{0}
-	kv := storage.New(b, lessor, index)
+	kv := mvcc.New(b, lessor, index)
 
 	s := &etcdStore{
 		proposalc:   proposalc,
@@ -208,20 +208,20 @@ func (s *etcdStore) Hash(ctx context.Context, req *etcdserverpb.HashRequest) (*e
 
 // The "consistent index" is the index number of the most recent committed
 // entry. This logical value is duplicated and tracked in multiple places
-// throughout the etcd server and storage code.
+// throughout the etcd server and mvcc.code.
 //
 // For our part, we are expected to store one instance of this number, setting
 // it whenever we receive a committed entry via entryc, and making it available
 // for queries.
 //
-// The etcd storage backend is given a reference to this instance in the form of
+// The etcd mvccpbackend is given a reference to this instance in the form of
 // a ConsistentIndexGetter interface. In addition, it tracks its own view of the
-// consistent index in a special bucket+key. See package etcd/storage, type
+// consistent index in a special bucket+key. See package etcd/mvcc. type
 // consistentWatchableStore, method consistentIndex.
 //
 // Whenever a user makes an e.g. Put request, these values are compared. If
 // there is some inconsistency, the transaction is marked as "skip" and becomes
-// a no-op. This happens transparently to the user. See package etcd/storage,
+// a no-op. This happens transparently to the user. See package etcd/mvcc.
 // type consistentWatchableStore, method TxnBegin.
 //
 // tl;dr: (ಠ_ಠ)
@@ -439,12 +439,12 @@ func isGteRange(rangeEnd []byte) bool {
 	return len(rangeEnd) == 1 && rangeEnd[0] == 0
 }
 
-func applyRange(txnID int64, kv storage.KV, r *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
+func applyRange(txnID int64, kv mvcc.KV, r *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
 	resp := &etcdserverpb.RangeResponse{}
 	resp.Header = &etcdserverpb.ResponseHeader{}
 
 	var (
-		kvs []storagepb.KeyValue
+		kvs []mvccpb.KeyValue
 		rev int64
 		err error
 	)
@@ -509,7 +509,7 @@ func applyRange(txnID int64, kv storage.KV, r *etcdserverpb.RangeRequest) (*etcd
 	return resp, nil
 }
 
-type kvSort struct{ kvs []storagepb.KeyValue }
+type kvSort struct{ kvs []mvccpb.KeyValue }
 
 func (s *kvSort) Swap(i, j int) {
 	t := s.kvs[i]
@@ -548,7 +548,7 @@ func (s *kvSortByValue) Less(i, j int) bool {
 	return bytes.Compare(s.kvs[i].Value, s.kvs[j].Value) < 0
 }
 
-func applyPut(txnID int64, kv storage.KV, lessor lease.Lessor, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
+func applyPut(txnID int64, kv mvcc.KV, lessor lease.Lessor, req *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
 	resp := &etcdserverpb.PutResponse{}
 	resp.Header = &etcdserverpb.ResponseHeader{}
 	var (
@@ -573,7 +573,7 @@ func applyPut(txnID int64, kv storage.KV, lessor lease.Lessor, req *etcdserverpb
 	return resp, nil
 }
 
-func applyDeleteRange(txnID int64, kv storage.KV, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
+func applyDeleteRange(txnID int64, kv mvcc.KV, req *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
 	resp := &etcdserverpb.DeleteRangeResponse{}
 	resp.Header = &etcdserverpb.ResponseHeader{}
 
@@ -601,7 +601,7 @@ func applyDeleteRange(txnID int64, kv storage.KV, req *etcdserverpb.DeleteRangeR
 	return resp, nil
 }
 
-func applyTransaction(kv storage.KV, lessor lease.Lessor, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
+func applyTransaction(kv mvcc.KV, lessor lease.Lessor, req *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
 	var revision int64
 
 	ok := true
@@ -669,7 +669,7 @@ func checkRequestLeases(le lease.Lessor, reqs []*etcdserverpb.RequestUnion) erro
 	return nil
 }
 
-func checkRequestRange(kv storage.KV, reqs []*etcdserverpb.RequestUnion) error {
+func checkRequestRange(kv mvcc.KV, reqs []*etcdserverpb.RequestUnion) error {
 	for _, requ := range reqs {
 		tv, ok := requ.Request.(*etcdserverpb.RequestUnion_RequestRange)
 		if !ok {
@@ -681,16 +681,16 @@ func checkRequestRange(kv storage.KV, reqs []*etcdserverpb.RequestUnion) error {
 		}
 
 		if greq.Revision > kv.Rev() {
-			return storage.ErrFutureRev
+			return mvcc.ErrFutureRev
 		}
 		if greq.Revision < kv.FirstRev() {
-			return storage.ErrCompacted
+			return mvcc.ErrCompacted
 		}
 	}
 	return nil
 }
 
-func applyUnion(txnID int64, kv storage.KV, union *etcdserverpb.RequestUnion) *etcdserverpb.ResponseUnion {
+func applyUnion(txnID int64, kv mvcc.KV, union *etcdserverpb.RequestUnion) *etcdserverpb.ResponseUnion {
 	switch tv := union.Request.(type) {
 	case *etcdserverpb.RequestUnion_RequestRange:
 		if tv.RequestRange != nil {
@@ -726,15 +726,15 @@ func applyUnion(txnID int64, kv storage.KV, union *etcdserverpb.RequestUnion) *e
 // applyCompare applies the compare request.
 // It returns the revision at which the comparison happens. If the comparison
 // succeeds, the it returns true. Otherwise it returns false.
-func applyCompare(kv storage.KV, c *etcdserverpb.Compare) (int64, bool) {
+func applyCompare(kv mvcc.KV, c *etcdserverpb.Compare) (int64, bool) {
 	ckvs, rev, err := kv.Range(c.Key, nil, 1, 0)
 	if err != nil {
-		if err == storage.ErrTxnIDMismatch {
+		if err == mvcc.ErrTxnIDMismatch {
 			panic("unexpected txn ID mismatch error")
 		}
 		return rev, false
 	}
-	var ckv storagepb.KeyValue
+	var ckv mvccpb.KeyValue
 	if len(ckvs) != 0 {
 		ckv = ckvs[0]
 	} else {
@@ -802,7 +802,7 @@ func compareInt64(a, b int64) int {
 	}
 }
 
-func applyCompaction(kv storage.KV, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
+func applyCompaction(kv mvcc.KV, req *etcdserverpb.CompactionRequest) (*etcdserverpb.CompactionResponse, error) {
 	resp := &etcdserverpb.CompactionResponse{}
 	resp.Header = &etcdserverpb.ResponseHeader{}
 	_, err := kv.Compact(req.Revision)
