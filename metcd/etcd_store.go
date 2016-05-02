@@ -189,23 +189,33 @@ func (s *etcdStore) Compact(ctx context.Context, req *etcdserverpb.CompactionReq
 	return nil, errors.New("not implemented")
 }
 
+// Watch implements gRPC WatchServer.
+// Watch watches for events happening or that have happened. Both input and output
+// are streams; the input stream is for creating and canceling watchers and the output
+// stream sends events. One watch RPC can watch on multiple key ranges, streaming events
+// for several watches at once. The entire event history can be watched starting from the
+// last compaction revision.
+func (s *etcdStore) Watch(etcdserverpb.Watch_WatchServer) error {
+	return errors.New("not implemented")
+}
+
 // The "consistent index" is the index number of the most recent committed
 // entry. This logical value is duplicated and tracked in multiple places
-// throughout the etcd server and mvcc.code.
+// throughout the etcd server and store code.
 //
 // For our part, we are expected to store one instance of this number, setting
 // it whenever we receive a committed entry via entryc, and making it available
 // for queries.
 //
-// The etcd mvccpbackend is given a reference to this instance in the form of
-// a ConsistentIndexGetter interface. In addition, it tracks its own view of the
-// consistent index in a special bucket+key. See package etcd/mvcc. type
+// The etcd store backend is given a reference to this instance in the form of a
+// ConsistentIndexGetter interface. In addition, it tracks its own view of the
+// consistent index in a special bucket+key. See package etcd/mvcc, type
 // consistentWatchableStore, method consistentIndex.
 //
 // Whenever a user makes an e.g. Put request, these values are compared. If
 // there is some inconsistency, the transaction is marked as "skip" and becomes
-// a no-op. This happens transparently to the user. See package etcd/mvcc.
-// type consistentWatchableStore, method TxnBegin.
+// a no-op. This happens transparently to the user. See package etcd/mvcc, type
+// consistentWatchableStore, method TxnBegin.
 //
 // tl;dr: (ಠ_ಠ)
 type consistentIndex struct{ i uint64 }
