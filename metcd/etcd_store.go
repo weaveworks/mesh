@@ -189,23 +189,6 @@ func (s *etcdStore) Compact(ctx context.Context, req *etcdserverpb.CompactionReq
 	return nil, errors.New("not implemented")
 }
 
-// Hash implements gRPC KVServer.
-// Hash returns the hash of local KV state for consistency checking purpose.
-// This is designed for testing purpose. Do not use this in production when there
-// are ongoing transactions.
-func (s *etcdStore) Hash(ctx context.Context, req *etcdserverpb.HashRequest) (*etcdserverpb.HashResponse, error) {
-	h, err := s.kv.Hash()
-	if err != nil {
-		return nil, err
-	}
-	return &etcdserverpb.HashResponse{
-		Header: &etcdserverpb.ResponseHeader{
-			Revision: s.kv.Rev(),
-		},
-		Hash: h,
-	}, nil
-}
-
 // The "consistent index" is the index number of the most recent committed
 // entry. This logical value is duplicated and tracked in multiple places
 // throughout the etcd server and mvcc.code.
