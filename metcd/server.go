@@ -21,7 +21,7 @@ type Server interface {
 	etcdserverpb.KVServer
 	//etcdserverpb.LeaseServer
 	//etcdserverpb.MaintenanceServer
-	//etcdserverpb.WatchServer
+	etcdserverpb.WatchServer
 }
 
 // GRPCServer converts a metcd.Server to a *grpc.Server.
@@ -32,7 +32,7 @@ func GRPCServer(s Server, options ...grpc.ServerOption) *grpc.Server {
 	etcdserverpb.RegisterKVServer(srv, s)
 	//etcdserverpb.RegisterLeaseServer(srv, s)
 	//etcdserverpb.RegisterMaintenanceServer(srv, s)
-	//etcdserverpb.RegisterWatchServer(srv, s)
+	etcdserverpb.RegisterWatchServer(srv, s)
 	return srv
 }
 
