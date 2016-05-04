@@ -29,15 +29,23 @@ We will support multiple deployment scenarios, including
 
 ## Developing
 
-### Building
+Mesh builds with the standard Go tooling. You will need to put the
+repository in Go's expected directory structure; i.e.,
+`$GOPATH/src/github.com/weaveworks/mesh`.
 
-`go install ./...`
+### Building
 
 If necessary, you may fetch the latest version of all of the dependencies into your GOPATH via
 
-`go get -d -u ./...`
+`go get -d -u -t ./...`
+
+Build the code with the usual
+
+`go install ./...`
 
 ### Testing
+
+Assuming you've fetched dependencies as above,
 
 `go test ./...`
 
