@@ -20,7 +20,7 @@ import (
 )
 
 // Transport-agnostic reimplementation of coreos/etcd/etcdserver. The original
-// is unsuitable because it is tightly coupled to persistent mvcc. an HTTP
+// is unsuitable because it is tightly coupled to persistent storage, an HTTP
 // transport, etc. Implements selected etcd V3 API (gRPC) methods.
 type etcdStore struct {
 	proposalc   chan<- []byte
@@ -191,20 +191,20 @@ func (s *etcdStore) Compact(ctx context.Context, req *etcdserverpb.CompactionReq
 
 // The "consistent index" is the index number of the most recent committed
 // entry. This logical value is duplicated and tracked in multiple places
-// throughout the etcd server and mvcc.code.
+// throughout the etcd server and storage code.
 //
 // For our part, we are expected to store one instance of this number, setting
 // it whenever we receive a committed entry via entryc, and making it available
 // for queries.
 //
-// The etcd mvccpbackend is given a reference to this instance in the form of
+// The etcd storage backend is given a reference to this instance in the form of
 // a ConsistentIndexGetter interface. In addition, it tracks its own view of the
-// consistent index in a special bucket+key. See package etcd/mvcc. type
+// consistent index in a special bucket+key. See package etcd/mvcc, type
 // consistentWatchableStore, method consistentIndex.
 //
 // Whenever a user makes an e.g. Put request, these values are compared. If
 // there is some inconsistency, the transaction is marked as "skip" and becomes
-// a no-op. This happens transparently to the user. See package etcd/mvcc.
+// a no-op. This happens transparently to the user. See package etcd/mvcc,
 // type consistentWatchableStore, method TxnBegin.
 //
 // tl;dr: (ಠ_ಠ)
@@ -386,10 +386,10 @@ func (s *etcdStore) registerPending(id uint64) (<-chan proto.Message, <-chan err
 func (s *etcdStore) signalPending(id uint64, msg proto.Message) {
 	rc, ok := s.pending[id]
 	if !ok {
-		// InternalRaftRequests are replicated via Raft. So all peers will invoke this
-		// method for all messages on commit. But only the peer that serviced the API
-		// request will have an operating pending. So, this is a normal "failure"
-		// mode.
+		// InternalRaftRequests are replicated via Raft. So all peers will
+		// invoke this method for all messages on commit. But only the peer that
+		// serviced the API request will have an operating pending. So, this is
+		// a normal "failure" mode.
 		return
 	}
 	rc.msgc <- msg

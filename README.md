@@ -31,7 +31,11 @@ We will support multiple deployment scenarios, including
 
 ### Building
 
-`go build ./...`
+`go install ./...`
+
+If necessary, you may fetch the latest version of all of the dependencies into your GOPATH via
+
+`go get -d -u ./...`
 
 ### Testing
 
@@ -46,10 +50,9 @@ To avoid compatibility and availability issues, Mesh doesn't vendor its own depe
 
 There are several tools to make vendoring easier, including
  [gb](https://getgb.io),
- [gvt](https://github.com/filosottile/gvt), and
- [glide](https://github.com/Masterminds/glide).
-Also, consider using the [GO15VENDOREXPERIMENT method](https://docs.google.com/document/d/1Bz5-UB7g2uPBdOx-rw5t9MxJwkfpx90cqG9AFL0JAYo/edit)
- supported in Go 1.5 and set to become standard in Go 1.6.
+ [gvt](https://github.com/filosottile/gvt),
+ [glide](https://github.com/Masterminds/glide), and
+ [govendor](https://github.com/kardianos/govendor).
 
 ### Workflow
 
@@ -65,6 +68,4 @@ All contributions should be made as pull requests that satisfy the guidelines, b
 
 In addition, several mechanical checks are enforced.
 See [the lint script](/lint) for details.
-
-Note that the existing codebase is still being refactored to abide these rules.
 
