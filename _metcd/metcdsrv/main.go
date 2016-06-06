@@ -95,7 +95,8 @@ func main() {
 		router.Stop()
 	}()
 
-	router.ConnectionMaker.InitiateConnections(peers.slice(), true)
+	indirectPeers := []string{}
+	router.ConnectionMaker.InitiateConnections(peers.slice(), indirectPeers, true)
 
 	terminatec := make(chan struct{})
 	terminatedc := make(chan error)
