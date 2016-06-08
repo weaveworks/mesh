@@ -70,7 +70,7 @@ func (p *peer) incr() (result int) {
 		if p.send != nil {
 			p.send.GossipBroadcast(st)
 		} else {
-			log.Printf("no sender configured; not broadcasting update right now")
+			p.logger.Printf("no sender configured; not broadcasting update right now")
 		}
 		result = st.get()
 	}
