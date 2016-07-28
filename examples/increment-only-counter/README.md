@@ -1,8 +1,7 @@
 # Increment-only counter
 
-This example implements an in-memory key-value cache.
-Keys are strings, and values are increment-only counters.
-This is a state-based CRDT, so the write operation is set(key, value).
+This example implements an in-memory incremental-only counter.
+This is a state-based CRDT, so the write operation is `incr()`.
 
 ## Demo
 
@@ -15,22 +14,38 @@ $ ./increment-only-counter -hwaddr 00:00:00:00:00:02 -nickname b -mesh :6002 -ht
 $ ./increment-only-counter -hwaddr 00:00:00:00:00:03 -nickname c -mesh :6003 -http :8003 -peer 127.0.0.1:6001 &
 ```
 
-Set a value using the HTTP API of any peer.
+Get current value using the HTTP API of any peer.
 
+```
+$ curl -Ss -XGET "http://localhost:8002/"
+get => 0
+```
+
+Increameant the value:
 ```
 $ curl -Ss -XPOST "http://localhost:8003/"
-set(a, 123) => 123
+incr => 1
 ```
 
-Get the value from any other peer.
-
+Get current value from another peer:
 ```
 $ curl -Ss -XGET "http://localhost:8001/"
-get(a) => 123
+get => 1
 ```
+Incremeant again:
+```
+$ curl -Ss -XPOST "http://localhost:8002/"
+incr => 2
+```
+And get current value from a different peer:
+```
+> curl -Ss -XGET "http://localhost:8003/"
+get => 2
+```
+
 
 ## Implementation
 
-- [The state object](/examples/increment-only-counter/state.go) implements GossipData.
-- [The peer object](/examples/increment-only-counter/peer.go) implements Gossiper.
+- [The state object](/examples/increment-only-counter/state.go) implements `GossipData`.
+- [The peer object](/examples/increment-only-counter/peer.go) implements `Gossiper`.
 - [The func main](/examples/increment-only-counter/main.go) wires the components together.
