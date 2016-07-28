@@ -18,14 +18,14 @@ $ ./increment-only-counter -hwaddr 00:00:00:00:00:03 -nickname c -mesh :6003 -ht
 Set a value using the HTTP API of any peer.
 
 ```
-$ curl -Ss -XPOST "http://localhost:8003/?key=a&value=123"
+$ curl -Ss -XPOST "http://localhost:8003/"
 set(a, 123) => 123
 ```
 
 Get the value from any other peer.
 
 ```
-$ curl -Ss -XGET "http://localhost:8001/?key=a"
+$ curl -Ss -XGET "http://localhost:8001/"
 get(a) => 123
 ```
 
