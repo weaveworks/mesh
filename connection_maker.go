@@ -194,8 +194,9 @@ func (cm *connectionMaker) connectionTerminated(conn Connection, err error) {
 			target := cm.targets[conn.remoteTCPAddress()]
 			target.state = targetWaiting
 			target.lastError = err
+			_, peerNameCollision := err.(*peerNameCollisionError)
 			switch {
-			case err == errConnectToSelf:
+			case peerNameCollision || err == errConnectToSelf:
 				target.nextTryNever()
 			case time.Now().After(target.tryAfter.Add(resetAfter)):
 				target.nextTryNow()
