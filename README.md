@@ -47,7 +47,7 @@ Build the code with the usual
 
 Assuming you've fetched dependencies as above,
 
-`go test ./...`
+`go test $(go list -f '{{.ImportPath}}' ./... | grep -v metcd)`
 
 ### Dependencies
 
