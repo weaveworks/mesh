@@ -56,7 +56,8 @@ func (st *state) copy() *state {
 }
 
 // Encode serializes our complete state to a slice of byte-slices.
-// In this simple example, we use a single JSON-encoded buffer.
+// In this simple example, we use a single gob-encoded
+// buffer: see https://golang.org/pkg/encoding/gob/
 func (st *state) Encode() [][]byte {
 	st.mtx.RLock()
 	defer st.mtx.RUnlock()
