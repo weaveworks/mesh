@@ -133,7 +133,7 @@ func (cm *connectionMaker) ForgetConnections(peers []string) {
 		for _, peer := range peers {
 			delete(cm.directPeers, peer)
 		}
-		return false
+		return true
 	}
 }
 
