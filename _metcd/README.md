@@ -4,6 +4,9 @@ metcd implements the [etcd](https://github.com/coreos/etcd)
  [V3 API](https://github.com/coreos/etcd/blob/master/Documentation/rfc/v3api.md)
  on top of Weave Mesh.
 
+**Note** that this package no longer compiles due to changes in etcd upstream.
+The code remains for historical purposes.
+
 # Caveats
 
 - We only partially implement the etcd V3 API. See [etcd_store.go](https://github.com/weaveworks/mesh/blob/master/metcd/etcd_store.go) for details.
