@@ -145,9 +145,9 @@ func (cm *connectionMaker) Targets(activeOnly bool) []string {
 	resultChan := make(chan []string, 0)
 	cm.actionChan <- func() bool {
 		var slice []string
-		for peer := range cm.directPeers {
+		for peer, addr := range cm.directPeers {
 			if activeOnly {
-				if target, ok := cm.targets[peer]; ok && target.tryAfter.IsZero() {
+				if target, ok := cm.targets[cm.completeAddr(*addr)]; ok && target.tryAfter.IsZero() {
 					continue
 				}
 			}
