@@ -190,7 +190,9 @@ func (cm *connectionMaker) connectionCreated(conn Connection) {
 // target identified by conn.RemoteTCPAddr() as Waiting.
 func (cm *connectionMaker) connectionTerminated(conn Connection, err error) {
 	cm.actionChan <- func() bool {
-		cm.terminationCount++
+		if err != errConnectToSelf {
+			cm.terminationCount++
+		}
 		delete(cm.connections, conn)
 		if conn.isOutbound() {
 			target := cm.targets[conn.remoteTCPAddress()]
