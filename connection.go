@@ -389,8 +389,8 @@ func (conn *LocalConnection) teardown(err error) {
 	}
 
 	if conn.tcpConn != nil {
-		if err := conn.tcpConn.Close(); err != nil {
-			conn.logger.Printf("warning: %v", err)
+		if closeErr := conn.tcpConn.Close(); closeErr != nil {
+			conn.logger.Printf("warning: %v", closeErr)
 		}
 	}
 
