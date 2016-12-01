@@ -159,10 +159,11 @@ func randomPeerUID() PeerUID {
 // while.
 type PeerShortID uint16
 
-const peerShortIDBits = 12
+// PeerShortIDBits denotes length of PeerShortID.
+const PeerShortIDBits = 12
 
 func randomPeerShortID() PeerShortID {
-	return PeerShortID(randUint16() & (1<<peerShortIDBits - 1))
+	return PeerShortID(randUint16() & (1<<PeerShortIDBits - 1))
 }
 
 func randBytes(n int) []byte {

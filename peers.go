@@ -242,7 +242,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 	// First, just try picking some short IDs at random, and
 	// seeing if they are available:
 	for i := 0; i < 10; i++ {
-		shortID := PeerShortID(rng.Intn(1 << peerShortIDBits))
+		shortID := PeerShortID(rng.Intn(1 << PeerShortIDBits))
 		if peers.byShortID[shortID].peer == nil {
 			return shortID, true
 		}
@@ -250,7 +250,7 @@ func (peers *Peers) chooseShortID() (PeerShortID, bool) {
 
 	// Looks like most short IDs are used. So count the number of
 	// unused ones, and pick one at random.
-	available := int(1 << peerShortIDBits)
+	available := int(1 << PeerShortIDBits)
 	for _, entry := range peers.byShortID {
 		if entry.peer != nil {
 			available--

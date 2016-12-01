@@ -122,14 +122,14 @@ func TestPeersGarbageCollection(t *testing.T) {
 
 func TestShortIDCollisions(t *testing.T) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	_, peers := newNode(PeerName(1 << peerShortIDBits))
+	_, peers := newNode(PeerName(1 << PeerShortIDBits))
 
 	// Make enough peers that short id collisions are
 	// overwhelmingly likely
-	ps := make([]*Peer, 1<<peerShortIDBits)
-	for i := 0; i < 1<<peerShortIDBits; i++ {
+	ps := make([]*Peer, 1<<PeerShortIDBits)
+	for i := 0; i < 1<<PeerShortIDBits; i++ {
 		ps[i] = newPeer(PeerName(i), "", PeerUID(i), 0,
-			PeerShortID(rng.Intn(1<<peerShortIDBits)))
+			PeerShortID(rng.Intn(1<<PeerShortIDBits)))
 	}
 
 	shuffle := func() {
@@ -147,7 +147,7 @@ func TestShortIDCollisions(t *testing.T) {
 	}
 
 	// Check invariants
-	counts := make([]int, 1<<peerShortIDBits)
+	counts := make([]int, 1<<PeerShortIDBits)
 	saw := func(p *Peer) {
 		if p != peers.ourself.Peer {
 			counts[p.UID]++
@@ -201,7 +201,7 @@ func TestShortIDReassignmentEasy(t *testing.T) {
 
 	for i := 1; i <= 10; i++ {
 		peers.fetchWithDefault(newPeer(PeerName(i), "", PeerUID(i), 0,
-			PeerShortID(rng.Intn(1<<peerShortIDBits))))
+			PeerShortID(rng.Intn(1<<PeerShortIDBits))))
 	}
 
 	checkShortIDReassignment(t, peers)
@@ -210,12 +210,12 @@ func TestShortIDReassignmentEasy(t *testing.T) {
 // Test the hard case of short id reassignment, when most short ids are taken
 func TestShortIDReassignmentHard(t *testing.T) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	_, peers := newNode(PeerName(1 << peerShortIDBits))
+	_, peers := newNode(PeerName(1 << PeerShortIDBits))
 
 	// Take all short ids
-	ps := make([]*Peer, 1<<peerShortIDBits)
+	ps := make([]*Peer, 1<<PeerShortIDBits)
 	var pending peersPendingNotifications
-	for i := 0; i < 1<<peerShortIDBits; i++ {
+	for i := 0; i < 1<<PeerShortIDBits; i++ {
 		ps[i] = newPeer(PeerName(i), "", PeerUID(i), 0,
 			PeerShortID(i))
 		peers.addByShortID(ps[i], &pending)
@@ -247,7 +247,7 @@ func checkShortIDReassignment(t *testing.T, peers *Peers) {
 }
 
 func TestShortIDInvalidation(t *testing.T) {
-	_, peers := newNode(PeerName(1 << peerShortIDBits))
+	_, peers := newNode(PeerName(1 << PeerShortIDBits))
 
 	// need to use a short id that is not the local peer's
 	shortID := peers.ourself.ShortID + 1
@@ -350,10 +350,10 @@ func TestShortIDCollision(t *testing.T) {
 // away, so the local peer reassigns
 func TestDeferredShortIDReassignment(t *testing.T) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	_, us := newNode(PeerName(1 << peerShortIDBits))
+	_, us := newNode(PeerName(1 << PeerShortIDBits))
 
 	// Connect us to other peers occupying all short ids
-	others := make([]*Peers, 1<<peerShortIDBits)
+	others := make([]*Peers, 1<<PeerShortIDBits)
 	var pending peersPendingNotifications
 	for i := range others {
 		_, others[i] = newNode(PeerName(i))
@@ -368,7 +368,7 @@ func TestDeferredShortIDReassignment(t *testing.T) {
 
 	// Disconnect one peer, and we should now be able to claim its
 	// short id
-	other := others[rng.Intn(1<<peerShortIDBits)]
+	other := others[rng.Intn(1<<PeerShortIDBits)]
 	us.DeleteTestConnection(other.ourself.Peer)
 	us.GarbageCollect()
 

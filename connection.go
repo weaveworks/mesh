@@ -303,7 +303,7 @@ func (conn *LocalConnection) parseFeatures(features map[string]string) (*Peer, e
 	var hasShortID bool
 	if shortIDStr, ok := features["ShortID"]; ok {
 		hasShortID = true
-		shortID, err = strconv.ParseUint(shortIDStr, 10, peerShortIDBits)
+		shortID, err = strconv.ParseUint(shortIDStr, 10, PeerShortIDBits)
 		if err != nil {
 			return nil, err
 		}
