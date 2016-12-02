@@ -47,6 +47,14 @@ type OverlayConnectionParams struct {
 	// in the lowest 64 bits.
 	SessionKey *[32]byte
 
+	// Local IPSec SA key for outbound overlay connections; non-empty if
+	// connection is encrypted.
+	LocalSAKey []byte
+
+	// Remote IPSec SA key for inbound overlay connections; non-empty if
+	// connection is encrypted.
+	RemoteSAKey []byte
+
 	// Function to send a control message to the counterpart
 	// overlay connection.
 	SendControlMessage func(tag byte, msg []byte) error
