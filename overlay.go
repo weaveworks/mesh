@@ -15,6 +15,9 @@ type Overlay interface {
 
 	// Obtain diagnostic information specific to the overlay.
 	Diagnostics() interface{}
+
+	// Stop the overlay.
+	Stop()
 }
 
 // OverlayConnectionParams are used to set up overlay connections.
