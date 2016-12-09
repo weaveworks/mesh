@@ -84,9 +84,10 @@ func (router *Router) Start() {
 	router.listenTCP()
 }
 
-// Stop shuts down the router. In theory.
+// Stop shuts down the router.
 func (router *Router) Stop() error {
-	// TODO: perform graceful shutdown...
+	router.Overlay.Stop()
+	// TODO: perform more graceful shutdown...
 	return nil
 }
 
