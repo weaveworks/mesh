@@ -69,17 +69,15 @@ type LocalConnection struct {
 	version         byte
 	tcpSender       tcpSender
 	sessionKey      *[32]byte
-	// TODO(mp) no need to store SA keys in LocalConnection
-	localSAKey   []byte
-	remoteSAKey  []byte
-	heartbeatTCP *time.Ticker
-	router       *Router
-	uid          uint64
-	actionChan   chan<- connectionAction
-	errorChan    chan<- error
-	finished     <-chan struct{} // closed to signal that actorLoop has finished
-	senders      *gossipSenders
-	logger       Logger
+	localSAKey      []byte
+	heartbeatTCP    *time.Ticker
+	router          *Router
+	uid             uint64
+	actionChan      chan<- connectionAction
+	errorChan       chan<- error
+	finished        <-chan struct{} // closed to signal that actorLoop has finished
+	senders         *gossipSenders
+	logger          Logger
 }
 
 // If the connection is successful, it will end up in the local peer's
@@ -208,6 +206,11 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 		return
 	}
 
+	remoteSAKey, err := conn.parseRemoteSAKey(intro.Features)
+	if err != nil {
+		return
+	}
+
 	if err = conn.registerRemote(remote, acceptNewPeer); err != nil {
 		return
 	}
@@ -215,30 +218,24 @@ func (conn *LocalConnection) run(actionChan <-chan connectionAction, errorChan <
 
 	conn.logf("connection ready; using protocol version %v", conn.version)
 
-	// only use negotiated session key for untrusted connections
-	var (
-		sessionKey  *[32]byte
-		localSAKey  []byte
-		remoteSAKey []byte
-	)
-	if conn.untrusted() {
-		sessionKey = conn.sessionKey
-		localSAKey = conn.localSAKey
-		remoteSAKey = conn.remoteSAKey
-	}
-
 	params := OverlayConnectionParams{
 		RemotePeer:         conn.remote,
 		LocalAddr:          conn.tcpConn.LocalAddr().(*net.TCPAddr),
 		RemoteAddr:         conn.tcpConn.RemoteAddr().(*net.TCPAddr),
 		Outbound:           conn.outbound,
 		ConnUID:            conn.uid,
-		SessionKey:         sessionKey,
-		LocalSAKey:         localSAKey,
-		RemoteSAKey:        remoteSAKey,
 		SendControlMessage: conn.sendOverlayControlMessage,
 		Features:           intro.Features,
 	}
+	// only use negotiated session key and SA keys for untrusted connections
+	if conn.untrusted() {
+		params.SessionKey = conn.sessionKey
+		params.LocalSAKey = conn.localSAKey
+		params.RemoteSAKey = remoteSAKey
+	}
+	// Prevent from accidental logging
+	conn.localSAKey = nil
+
 	if conn.OverlayConn, err = conn.router.Overlay.PrepareConnection(params); err != nil {
 		return
 	}
@@ -307,16 +304,6 @@ func (conn *LocalConnection) parseFeatures(features map[string]string) (*Peer, e
 		return nil, err
 	}
 
-	if initialSAKey, ok := features["InitialSAKey"]; ok {
-		if remoteSAKey, err := hex.DecodeString(initialSAKey); err == nil {
-			conn.remoteSAKey = remoteSAKey
-		}
-	}
-	if conn.router.usingPassword() && conn.untrusted() && conn.remoteSAKey == nil {
-		return nil, fmt.Errorf("Field InitialSAKey is missing")
-	}
-	// TODO(mp) remove InitialSAKey from the features map to prevent from accidental logging
-
 	remotePeerNameFlavour := features["PeerNameFlavour"]
 	if remotePeerNameFlavour != PeerNameFlavour {
 		return nil, fmt.Errorf("Peer name flavour mismatch (ours: '%s', theirs: '%s')", PeerNameFlavour, remotePeerNameFlavour)
@@ -362,6 +349,21 @@ func (conn *LocalConnection) parseFeatures(features map[string]string) (*Peer, e
 	peer := newPeer(name, nickName, uid, 0, PeerShortID(shortID))
 	peer.HasShortID = hasShortID
 	return peer, nil
+}
+
+func (conn *LocalConnection) parseRemoteSAKey(features map[string]string) (key []byte, err error) {
+	if initialSAKey, ok := features["InitialSAKey"]; ok {
+		key, err = hex.DecodeString(initialSAKey)
+		if err != nil {
+			return
+		}
+	}
+	if conn.router.usingPassword() && conn.untrusted() && key == nil {
+		err = fmt.Errorf("Field InitialSAKey is missing")
+		return
+	}
+
+	return
 }
 
 func (conn *LocalConnection) registerRemote(remote *Peer, acceptNewPeer bool) error {
