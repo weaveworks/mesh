@@ -71,9 +71,9 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	})
 	router.Routes = newRoutes(router.Ourself, router.Peers)
 	router.ConnectionMaker = newConnectionMaker(router.Ourself, router.Peers, net.JoinHostPort(router.Host, "0"), router.Port, router.PeerDiscovery, logger)
+	router.logger = logger
 	router.topologyGossip = router.NewGossip("topology", router)
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
-	router.logger = logger
 
 	return router
 }
