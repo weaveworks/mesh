@@ -1,9 +1,26 @@
 package mesh
 
+import (
+	"bytes"
+	"sync"
+	"time"
+)
+
 // surrogateGossiper ignores unicasts and relays broadcasts and gossips.
-type surrogateGossiper struct{}
+type surrogateGossiper struct {
+	sync.Mutex
+	prevUpdates []prevUpdate
+}
+
+type prevUpdate struct {
+	update []byte
+	t      time.Time
+}
 
 var _ Gossiper = &surrogateGossiper{}
+
+// Hook to mock time for testing
+var now = func() time.Time { return time.Now() }
 
 // OnGossipUnicast implements Gossiper.
 func (*surrogateGossiper) OnGossipUnicast(sender PeerName, msg []byte) error {
@@ -20,8 +37,29 @@ func (*surrogateGossiper) Gossip() GossipData {
 	return nil
 }
 
-// OnGossip implements Gossiper.
-func (*surrogateGossiper) OnGossip(update []byte) (GossipData, error) {
+// OnGossip should return "everything new I've just learnt".
+// surrogateGossiper doesn't understand the content of messages, but it can eliminate simple duplicates
+func (s *surrogateGossiper) OnGossip(update []byte) (GossipData, error) {
+	s.Lock()
+	defer s.Unlock()
+	for _, p := range s.prevUpdates {
+		if bytes.Equal(update, p.update) {
+			return nil, nil
+		}
+	}
+	// Delete anything that's older than the gossip interval, so we don't grow forever
+	// (this time limit is arbitrary; surrogateGossiper should pass on new gossip immediately
+	// so there should be no reason for a duplicate to show up after a long time)
+	updateTime := now()
+	deleteBefore := updateTime.Add(-gossipInterval)
+	keepFrom := len(s.prevUpdates)
+	for i, p := range s.prevUpdates {
+		if p.t.After(deleteBefore) {
+			keepFrom = i
+			break
+		}
+	}
+	s.prevUpdates = append(s.prevUpdates[keepFrom:], prevUpdate{update, updateTime})
 	return newSurrogateGossipData(update), nil
 }
 
