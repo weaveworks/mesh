@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"bytes"
+	"hash/fnv"
 	"sync"
 	"time"
 )
@@ -14,6 +15,7 @@ type surrogateGossiper struct {
 
 type prevUpdate struct {
 	update []byte
+	hash   uint64
 	t      time.Time
 }
 
@@ -40,10 +42,13 @@ func (*surrogateGossiper) Gossip() GossipData {
 // OnGossip should return "everything new I've just learnt".
 // surrogateGossiper doesn't understand the content of messages, but it can eliminate simple duplicates
 func (s *surrogateGossiper) OnGossip(update []byte) (GossipData, error) {
+	hash := fnv.New64a()
+	_, _ = hash.Write(update)
+	updateHash := hash.Sum64()
 	s.Lock()
 	defer s.Unlock()
 	for _, p := range s.prevUpdates {
-		if bytes.Equal(update, p.update) {
+		if updateHash == p.hash && bytes.Equal(update, p.update) {
 			return nil, nil
 		}
 	}
@@ -59,7 +64,7 @@ func (s *surrogateGossiper) OnGossip(update []byte) (GossipData, error) {
 			break
 		}
 	}
-	s.prevUpdates = append(s.prevUpdates[keepFrom:], prevUpdate{update, updateTime})
+	s.prevUpdates = append(s.prevUpdates[keepFrom:], prevUpdate{update, updateHash, updateTime})
 	return newSurrogateGossipData(update), nil
 }
 
