@@ -173,13 +173,16 @@ func makeLocalConnectionStatusSlice(cm *connectionMaker) []LocalConnectionStatus
 				name = "none"
 			}
 			info := fmt.Sprintf("%-6v %v", name, conn.Remote())
+			encrypted := false
 			if lc.router.usingPassword() {
 				if lc.untrusted() {
+					encrypted = true
 					info = fmt.Sprintf("%-11v %v", "encrypted", info)
 				} else {
 					info = fmt.Sprintf("%-11v %v", "unencrypted", info)
 				}
 			}
+			attrs["encrypted"] = encrypted
 			slice = append(slice, LocalConnectionStatus{conn.remoteTCPAddress(), conn.isOutbound(), state, info, attrs})
 		}
 		for address, target := range cm.targets {
