@@ -22,9 +22,10 @@ type mockGossipConnection struct {
 
 var _ gossipConnection = &mockGossipConnection{}
 
-func newTestRouter(name string) *Router {
+func newTestRouter(t *testing.T, name string) *Router {
 	peerName, _ := PeerNameFromString(name)
-	router := NewRouter(Config{}, peerName, "nick", nil, log.New(ioutil.Discard, "", 0))
+	router, err := NewRouter(Config{}, peerName, "nick", nil, log.New(ioutil.Discard, "", 0))
+	require.NoError(t, err)
 	router.Start()
 	return router
 }
@@ -128,9 +129,9 @@ func flushAndCheckTopology(t *testing.T, routers []*Router, wantedPeers ...*Peer
 
 func TestGossipTopology(t *testing.T) {
 	// Create some peers that will talk to each other
-	r1 := newTestRouter("01:00:00:01:00:00")
-	r2 := newTestRouter("02:00:00:02:00:00")
-	r3 := newTestRouter("03:00:00:03:00:00")
+	r1 := newTestRouter(t, "01:00:00:01:00:00")
+	r2 := newTestRouter(t, "02:00:00:02:00:00")
+	r3 := newTestRouter(t, "03:00:00:03:00:00")
 	routers := []*Router{r1, r2, r3}
 	// Check state when they have no connections
 	checkTopology(t, r1, r1.tp())
@@ -163,9 +164,9 @@ func TestGossipTopology(t *testing.T) {
 
 func TestGossipSurrogate(t *testing.T) {
 	// create the topology r1 <-> r2 <-> r3
-	r1 := newTestRouter("01:00:00:01:00:00")
-	r2 := newTestRouter("02:00:00:02:00:00")
-	r3 := newTestRouter("03:00:00:03:00:00")
+	r1 := newTestRouter(t, "01:00:00:01:00:00")
+	r2 := newTestRouter(t, "02:00:00:02:00:00")
+	r3 := newTestRouter(t, "03:00:00:03:00:00")
 	routers := []*Router{r1, r2, r3}
 	addTestGossipConnection(r1, r2)
 	addTestGossipConnection(r3, r2)
@@ -174,8 +175,10 @@ func TestGossipSurrogate(t *testing.T) {
 	// create a gossiper at either end, but not the middle
 	g1 := newTestGossiper()
 	g3 := newTestGossiper()
-	s1 := r1.NewGossip("Test", g1)
-	s3 := r3.NewGossip("Test", g3)
+	s1, err := r1.NewGossip("Test", g1)
+	require.NoError(t, err)
+	s3, err := r3.NewGossip("Test", g3)
+	require.NoError(t, err)
 
 	// broadcast a message from each end, check it reaches the other
 	broadcast(s1, 1)
