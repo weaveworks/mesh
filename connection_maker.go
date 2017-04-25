@@ -26,9 +26,11 @@ type connectionMaker struct {
 	targets          map[string]*target
 	connections      map[Connection]struct{}
 	directPeers      peerAddrs
+	indirectPeers    map[string]struct{}
 	terminationCount int
 	actionChan       chan<- connectionMakerAction
 	logger           Logger
+	onDiscovery      func()
 }
 
 // TargetState describes the connection state of a remote target.
@@ -61,19 +63,24 @@ type connectionMakerAction func() bool
 func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port int, discovery bool, logger Logger) *connectionMaker {
 	actionChan := make(chan connectionMakerAction, ChannelSize)
 	cm := &connectionMaker{
-		ourself:     ourself,
-		peers:       peers,
-		localAddr:   localAddr,
-		port:        port,
-		discovery:   discovery,
-		directPeers: peerAddrs{},
-		targets:     make(map[string]*target),
-		connections: make(map[Connection]struct{}),
-		actionChan:  actionChan,
-		logger:      logger,
+		ourself:       ourself,
+		peers:         peers,
+		localAddr:     localAddr,
+		port:          port,
+		discovery:     discovery,
+		directPeers:   peerAddrs{},
+		indirectPeers: make(map[string]struct{}),
+		targets:       make(map[string]*target),
+		connections:   make(map[Connection]struct{}),
+		actionChan:    actionChan,
+		logger:        logger,
 	}
 	go cm.queryLoop(actionChan)
 	return cm
+}
+
+func (cm *connectionMaker) OnDiscovery(onDiscovery func()) {
+	cm.onDiscovery = onDiscovery
 }
 
 // InitiateConnections creates new connections to the provided peers,
@@ -82,7 +89,7 @@ func newConnectionMaker(ourself *localPeer, peers *Peers, localAddr string, port
 //
 // TODO(pb): Weave Net invokes router.ConnectionMaker.InitiateConnections;
 // it may be better to provide that on Router directly.
-func (cm *connectionMaker) InitiateConnections(peers []string, replace bool) []error {
+func (cm *connectionMaker) InitiateConnections(peers, indirectPeers []string, replace bool) []error {
 	errors := []error{}
 	addrs := peerAddrs{}
 	for _, peer := range peers {
@@ -109,6 +116,9 @@ func (cm *connectionMaker) InitiateConnections(peers []string, replace bool) []e
 			if target, found := cm.targets[cm.completeAddr(*addr)]; found {
 				target.nextTryNow()
 			}
+		}
+		for _, indirectPeer := range indirectPeers {
+			cm.indirectPeers[indirectPeer] = struct{}{}
 		}
 		return true
 	}
@@ -138,26 +148,37 @@ func (cm *connectionMaker) ForgetConnections(peers []string) {
 	}
 }
 
-// Targets takes a snapshot of the targets (direct peers),
+// Targets takes a snapshot of the direct and indirect peers,
 // either just the ones we are still trying, or all of them.
 // Note these are the same things that InitiateConnections and ForgetConnections talks about,
 // but a method to retrieve 'Connections' would obviously return the current connections.
-func (cm *connectionMaker) Targets(activeOnly bool) []string {
-	resultChan := make(chan []string, 0)
+func (cm *connectionMaker) Targets(activeOnly bool) ([]string, []string) {
+	resultChan := make(chan struct{ dp, ip []string }, 0)
 	cm.actionChan <- func() bool {
-		var slice []string
+		var direct, indirect []string
 		for peer, addr := range cm.directPeers {
 			if activeOnly {
 				if target, ok := cm.targets[cm.completeAddr(*addr)]; ok && target.tryAfter.IsZero() {
 					continue
 				}
 			}
-			slice = append(slice, peer)
+			direct = append(direct, peer)
 		}
-		resultChan <- slice
+	TargetLoop:
+		// Find targets which _don't_ result from direct peers
+		for targetKey := range cm.targets {
+			for _, dpVal := range cm.directPeers {
+				if targetKey == cm.completeAddr(*dpVal) {
+					continue TargetLoop
+				}
+			}
+			indirect = append(indirect, targetKey)
+		}
+		resultChan <- struct{ dp, ip []string }{direct, indirect}
 		return false
 	}
-	return <-resultChan
+	result := <-resultChan
+	return result.dp, result.ip
 }
 
 // connectionAborted marks the target identified by address as broken, and
@@ -195,7 +216,8 @@ func (cm *connectionMaker) connectionTerminated(conn Connection, err error) {
 		}
 		delete(cm.connections, conn)
 		if conn.isOutbound() {
-			target := cm.targets[conn.remoteTCPAddress()]
+			addr := conn.remoteTCPAddress()
+			target := cm.targets[addr]
 			target.state = targetWaiting
 			target.lastError = err
 			_, peerNameCollision := err.(*peerNameCollisionError)
@@ -210,6 +232,29 @@ func (cm *connectionMaker) connectionTerminated(conn Connection, err error) {
 		}
 		return true
 	}
+}
+
+func (cm *connectionMaker) notifyDiscoveryChange() {
+	if cm.onDiscovery == nil {
+		return
+	}
+
+	// We need the cm.onDiscovery callback to be invoked after the actor's
+	// current message (e.g. the one that has resulted in this method being
+	// called) has been fully processed, so we put another message in the
+	// actor's queue to do it later. The queue may be full, and we don't want
+	// to deadlock, so we do the enqueue in a goroutine:
+	go func(onDiscovery func()) {
+		cm.actionChan <- func() bool {
+			// Furthermore, the callback we've been given may call the public
+			// methods of the ConnectionMaker interface which would result in
+			// deadlock since they'd be being invoked from the actor goroutine.
+			// Therefore, we perform the actual callback invocation in a
+			// goroutine too:
+			go onDiscovery()
+			return false
+		}
+	}(cm.onDiscovery)
 }
 
 // refresh sends a no-op action into the ConnectionMaker, purely so that the
@@ -259,6 +304,7 @@ func (cm *connectionMaker) checkStateAndAttemptConnections() time.Duration {
 		tgt := &target{state: targetWaiting}
 		tgt.nextTryNow()
 		cm.targets[address] = tgt
+		return
 	}
 
 	// Add direct targets that are not connected
@@ -283,6 +329,13 @@ func (cm *connectionMaker) checkStateAndAttemptConnections() time.Duration {
 	// aren't
 	if cm.discovery {
 		cm.addPeerTargets(ourConnectedPeers, addTarget)
+		for indirectPeer := range cm.indirectPeers {
+			addTarget(indirectPeer)
+			// We haven't learned about this peer via gossip, so we have to
+			// connect to it as if it were a direct target to avoid a 'Found
+			// unknown remote peer' error
+			directTarget[indirectPeer] = struct{}{}
+		}
 	}
 
 	return cm.connectToTargets(validTarget, directTarget)
@@ -309,6 +362,8 @@ func (cm *connectionMaker) ourConnections() (peerNameSet, map[string]struct{}, m
 }
 
 func (cm *connectionMaker) addPeerTargets(ourConnectedPeers peerNameSet, addTarget func(string)) {
+	change := false
+
 	cm.peers.forEach(func(peer *Peer) {
 		if peer == cm.ourself.Peer {
 			return
@@ -333,8 +388,13 @@ func (cm *connectionMaker) addPeerTargets(ourConnectedPeers peerNameSet, addTarg
 				// weave port instead.
 				addTarget(fmt.Sprintf("%s:%d", ip, cm.port))
 			}
+			change = true
 		}
 	})
+
+	if change {
+		cm.notifyDiscoveryChange()
+	}
 }
 
 func (cm *connectionMaker) connectToTargets(validTarget map[string]struct{}, directTarget map[string]struct{}) time.Duration {

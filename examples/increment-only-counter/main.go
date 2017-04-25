@@ -77,7 +77,8 @@ func main() {
 		router.Stop()
 	}()
 
-	router.ConnectionMaker.InitiateConnections(peers.slice(), true)
+	indirectPeers := []string{}
+	router.ConnectionMaker.InitiateConnections(peers.slice(), indirectPeers, true)
 
 	errs := make(chan error)
 	go func() {
