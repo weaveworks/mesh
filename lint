@@ -19,4 +19,4 @@ gometalinter \
 	--disable=gas \
 	--cyclo-over=20 \
 	--tests \
-	--deadline=10s
+	--deadline=20s
