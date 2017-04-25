@@ -46,7 +46,7 @@ func main() {
 		logger.Fatalf("%s: %v", *hwaddr, err)
 	}
 
-	router := mesh.NewRouter(mesh.Config{
+	router, err := mesh.NewRouter(mesh.Config{
 		Host:               host,
 		Port:               port,
 		ProtocolMinVersion: mesh.ProtocolMinVersion,
@@ -56,8 +56,16 @@ func main() {
 		TrustedSubnets:     []*net.IPNet{},
 	}, name, *nickname, mesh.NullOverlay{}, log.New(ioutil.Discard, "", 0))
 
+	if err != nil {
+		logger.Fatalf("Could not create router: %v", err)
+	}
+
 	peer := newPeer(name, logger)
-	gossip := router.NewGossip(*channel, peer)
+	gossip, err := router.NewGossip(*channel, peer)
+	if err != nil {
+		logger.Fatalf("Could not create gossip: %v", err)
+	}
+
 	peer.register(gossip)
 
 	func() {
