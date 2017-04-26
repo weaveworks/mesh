@@ -143,7 +143,7 @@ func (cm *connectionMaker) ForgetConnections(peers []string) {
 // Note these are the same things that InitiateConnections and ForgetConnections talks about,
 // but a method to retrieve 'Connections' would obviously return the current connections.
 func (cm *connectionMaker) Targets(activeOnly bool) []string {
-	resultChan := make(chan []string, 0)
+	resultChan := make(chan []string)
 	cm.actionChan <- func() bool {
 		var slice []string
 		for peer, addr := range cm.directPeers {

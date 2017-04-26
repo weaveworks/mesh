@@ -158,7 +158,7 @@ type LocalConnectionStatus struct {
 // makeLocalConnectionStatusSlice takes a snapshot of the active local
 // connections in the ConnectionMaker.
 func makeLocalConnectionStatusSlice(cm *connectionMaker) []LocalConnectionStatus {
-	resultChan := make(chan []LocalConnectionStatus, 0)
+	resultChan := make(chan []LocalConnectionStatus)
 	cm.actionChan <- func() bool {
 		var slice []LocalConnectionStatus
 		for conn := range cm.connections {
