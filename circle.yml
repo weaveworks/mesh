@@ -1,4 +1,5 @@
 test:
   pre:
     - ./lint
-
+  override:
+    - go test -v -race $(go list -f '{{.ImportPath}}' ./... | grep -v metcd)
