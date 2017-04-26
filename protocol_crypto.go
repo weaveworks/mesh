@@ -16,7 +16,7 @@ import (
 // MaxTCPMsgSize is the hard limit on sends and receives. Larger messages will
 // result in errors. This applies to the LengthPrefixTCP{Sender,Receiver} i.e.
 // V2 of the protocol.
-const maxTCPMsgSize = 10 * 1024 * 1024
+const MaxTCPMsgSize = 10 * 1024 * 1024
 
 // GenerateKeyPair is used during encrypted protocol introduction.
 func generateKeyPair() (publicKey, privateKey *[32]byte, err error) {
@@ -99,8 +99,8 @@ func newLengthPrefixTCPSender(writer io.Writer) *lengthPrefixTCPSender {
 // uint32 before the msg. msgs larger than MaxTCPMsgSize are rejected.
 func (sender *lengthPrefixTCPSender) Send(msg []byte) error {
 	l := len(msg)
-	if l > maxTCPMsgSize {
-		return fmt.Errorf("outgoing message exceeds maximum size: %d > %d", l, maxTCPMsgSize)
+	if l > MaxTCPMsgSize {
+		return fmt.Errorf("outgoing message exceeds maximum size: %d > %d", l, MaxTCPMsgSize)
 	}
 	// We copy the message so we can send it in a single Write
 	// operation, thus making this thread-safe without locking.
@@ -169,8 +169,8 @@ func (receiver *lengthPrefixTCPReceiver) Receive() ([]byte, error) {
 		return nil, err
 	}
 	l := binary.BigEndian.Uint32(lenPrefix)
-	if l > maxTCPMsgSize {
-		return nil, fmt.Errorf("incoming message exceeds maximum size: %d > %d", l, maxTCPMsgSize)
+	if l > MaxTCPMsgSize {
+		return nil, fmt.Errorf("incoming message exceeds maximum size: %d > %d", l, MaxTCPMsgSize)
 	}
 	msg := make([]byte, l)
 	_, err := io.ReadFull(receiver.reader, msg)
