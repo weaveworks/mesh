@@ -15,6 +15,7 @@ type Peers struct {
 	byName    map[PeerName]*Peer
 	byShortID map[PeerShortID]shortIDPeers
 	onGC      []func(*Peer)
+	onUpdate  []func()
 
 	// Called when the mapping from short IDs to peers changes
 	onInvalidateShortIDs []func()
@@ -95,6 +96,14 @@ func (peers *Peers) OnGC(callback func(*Peer)) {
 	peers.onGC = append(peers.onGC, callback)
 }
 
+func (peers *Peers) OnUpdate(callback func()) {
+	peers.Lock()
+	defer peers.Unlock()
+
+	peers.onUpdate = append(peers.onUpdate, callback)
+
+}
+
 // OnInvalidateShortIDs adds a new function to a set of functions that will be
 // executed on all subsequent GC runs, when the mapping from short IDs to
 // peers has changed.
@@ -108,6 +117,7 @@ func (peers *Peers) OnInvalidateShortIDs(callback func()) {
 
 func (peers *Peers) unlockAndNotify(pending *peersPendingNotifications) {
 	broadcastLocalPeer := (pending.reassignLocalShortID && peers.reassignLocalShortID(pending)) || pending.localPeerModified
+	onUpdate := peers.onUpdate
 	onGC := peers.onGC
 	onInvalidateShortIDs := peers.onInvalidateShortIDs
 	peers.Unlock()
@@ -129,6 +139,11 @@ func (peers *Peers) unlockAndNotify(pending *peersPendingNotifications) {
 	if broadcastLocalPeer {
 		peers.ourself.broadcastPeerUpdate()
 	}
+
+	for _, callback := range onUpdate {
+		callback()
+	}
+
 }
 
 func (peers *Peers) addByShortID(peer *Peer, pending *peersPendingNotifications) {
