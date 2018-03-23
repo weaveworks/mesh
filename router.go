@@ -32,9 +32,9 @@ const (
 type Config struct {
 	Host               string
 	Port               int
-	ProtocolMinVersion byte
 	Password           []byte
 	ConnLimit          int
+	ProtocolMinVersion byte
 	PeerDiscovery      bool
 	TrustedSubnets     []*net.IPNet
 }
