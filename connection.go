@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -33,7 +34,9 @@ type remoteConnection struct {
 	remote        *Peer
 	remoteTCPAddr string
 	outbound      bool
-	established   bool
+
+	mtx         sync.RWMutex
+	established bool
 }
 
 func newRemoteConnection(from, to *Peer, tcpAddr string, outbound bool, established bool) *remoteConnection {
@@ -54,7 +57,17 @@ func (conn *remoteConnection) remoteTCPAddress() string { return conn.remoteTCPA
 
 func (conn *remoteConnection) isOutbound() bool { return conn.outbound }
 
-func (conn *remoteConnection) isEstablished() bool { return conn.established }
+func (conn *remoteConnection) isEstablished() bool {
+	conn.mtx.RLock()
+	defer conn.mtx.RUnlock()
+	return conn.established
+}
+
+func (conn *remoteConnection) setEstablished(val bool) {
+	conn.mtx.Lock()
+	defer conn.mtx.Unlock()
+	conn.established = val
+}
 
 // LocalConnection is the local (our) side of a connection.
 // It implements ProtocolSender, and manages per-channel GossipSenders.
@@ -117,8 +130,9 @@ func (conn *LocalConnection) breakTie(dupConn ourConnection) connectionTieBreak 
 }
 
 // Established returns true if the connection is established.
-// TODO(pb): data race?
 func (conn *LocalConnection) isEstablished() bool {
+	conn.mtx.RLock()
+	defer conn.mtx.RUnlock()
 	return conn.established
 }
 
@@ -355,7 +369,7 @@ func (conn *LocalConnection) actorLoop(errorChan <-chan error) (err error) {
 			case <-conn.heartbeatTCP.C:
 				err = conn.sendSimpleProtocolMsg(ProtocolHeartbeat)
 			case <-fwdEstablishedChan:
-				conn.established = true
+				conn.setEstablished(true)
 				fwdEstablishedChan = nil
 				conn.router.Ourself.doConnectionEstablished(conn)
 			case err = <-errorChan:
