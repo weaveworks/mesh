@@ -17,11 +17,12 @@ var (
 	// ChannelSize is the buffer size used by so-called actor goroutines
 	// throughout mesh.
 	ChannelSize = 16
+
+	gossipInterval = 30 * time.Second
 )
 
 const (
 	tcpHeartbeat     = 30 * time.Second
-	gossipInterval   = 30 * time.Second
 	maxDuration      = time.Duration(math.MaxInt64)
 	acceptMaxTokens  = 100
 	acceptTokenDelay = 100 * time.Millisecond // [2]
@@ -37,6 +38,7 @@ type Config struct {
 	ProtocolMinVersion byte
 	PeerDiscovery      bool
 	TrustedSubnets     []*net.IPNet
+	gossipInterval     *time.Duration
 }
 
 // Router manages communication between this peer and the rest of the mesh.
@@ -78,6 +80,9 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	}
 	router.topologyGossip = gossip
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
+	if config.gossipInterval != nil {
+		gossipInterval = *config.gossipInterval
+	}
 	return router, nil
 }
 
