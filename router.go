@@ -17,6 +17,10 @@ var (
 	// ChannelSize is the buffer size used by so-called actor goroutines
 	// throughout mesh.
 	ChannelSize = 16
+
+	// SingleHopTopolgy is used to indicate a topology of nodes participating
+	// in the mesh where each node is fully connected to other nodes
+	SingleHopTopolgy = false
 )
 
 const (
@@ -37,6 +41,7 @@ type Config struct {
 	ProtocolMinVersion byte
 	PeerDiscovery      bool
 	TrustedSubnets     []*net.IPNet
+	SingleHopTopolgy   *bool
 }
 
 // Router manages communication between this peer and the rest of the mesh.
@@ -78,6 +83,9 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	}
 	router.topologyGossip = gossip
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
+	if config.SingleHopTopolgy != nil {
+		SingleHopTopolgy = *config.SingleHopTopolgy
+	}
 	return router, nil
 }
 

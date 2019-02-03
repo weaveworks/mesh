@@ -100,7 +100,9 @@ func (peer *Peer) routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[
 			}
 			curPeer.forEachConnectedPeer(establishedAndSymmetric, routes,
 				func(remotePeer *Peer) {
-					nextWorklist = append(nextWorklist, remotePeer)
+					if !SingleHopTopolgy {
+						nextWorklist = append(nextWorklist, remotePeer)
+					}
 					remoteName := remotePeer.Name
 					// We now know how to get to remoteName: the same
 					// way we get to curPeer. Except, if curPeer is
