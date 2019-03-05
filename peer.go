@@ -86,7 +86,35 @@ func (peer *Peer) String() string {
 //
 // NB: This function should generally be invoked while holding a read lock on
 // Peers and LocalPeer.
-func (peer *Peer) routes(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
+func (peer *Peer) routes(stopAt *Peer, establishedAndSymmetric, fullyConnectedTopology bool) (bool, map[PeerName]PeerName) {
+	if fullyConnectedTopology {
+		return peer.routesForFullyConnectedTopology(stopAt, establishedAndSymmetric)
+	} else {
+		return peer.routesForGenericTopology(stopAt, establishedAndSymmetric)
+	}
+}
+
+// routesForFullyConnectedTopology calculates routes for a special case of network topology where each peer in the
+// mesh is fully connected to rest of the peers. So each peer is single hop and directly reachable from the peer.
+func (peer *Peer) routesForFullyConnectedTopology(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
+	routes := make(unicastRoutes)
+
+	for remoteName, conn := range peer.connections {
+		if establishedAndSymmetric && !conn.isEstablished() {
+			continue
+		}
+		remotePeer := conn.Remote()
+		if remotePeer == stopAt {
+			return true, routes
+		}
+		if remoteConn, found := remotePeer.connections[peer.Name]; !establishedAndSymmetric || (found && remoteConn.isEstablished()) {
+			routes[remoteName] = remoteName
+		}
+	}
+	return false, routes
+}
+
+func (peer *Peer) routesForGenericTopology(stopAt *Peer, establishedAndSymmetric bool) (bool, map[PeerName]PeerName) {
 	routes := make(unicastRoutes)
 	routes[peer.Name] = UnknownPeerName
 	nextWorklist := []*Peer{peer}

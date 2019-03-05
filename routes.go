@@ -227,7 +227,11 @@ func (r *routes) calculate() {
 // to exchange knowledge of MAC addresses, nor any constraints on
 // the routes that we construct.
 func (r *routes) calculateUnicast(establishedAndSymmetric bool) unicastRoutes {
-	_, unicast := r.ourself.routes(nil, establishedAndSymmetric)
+	singleHopTopology := false
+	if r.ourself.router != nil {
+		singleHopTopology = r.ourself.router.Config.SingleHopTopolgy
+	}
+	_, unicast := r.ourself.routes(nil, establishedAndSymmetric, singleHopTopology)
 	return unicast
 }
 
@@ -255,7 +259,11 @@ func (r *routes) calculateBroadcast(name PeerName, establishedAndSymmetric bool)
 	if !found {
 		return hops
 	}
-	if found, reached := peer.routes(r.ourself.Peer, establishedAndSymmetric); found {
+	singleHopTopology := false
+	if r.ourself.router != nil {
+		singleHopTopology = r.ourself.router.Config.SingleHopTopolgy
+	}
+	if found, reached := peer.routes(r.ourself.Peer, establishedAndSymmetric, singleHopTopology); found {
 		r.ourself.forEachConnectedPeer(establishedAndSymmetric, reached,
 			func(remotePeer *Peer) { hops = append(hops, remotePeer.Name) })
 	}

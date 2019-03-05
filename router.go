@@ -37,6 +37,9 @@ type Config struct {
 	ProtocolMinVersion byte
 	PeerDiscovery      bool
 	TrustedSubnets     []*net.IPNet
+	// SingleHopTopolgy is used to indicate a topology of nodes participating
+	// in the mesh where each node is fully connected to other nodes
+	SingleHopTopolgy bool
 }
 
 // Router manages communication between this peer and the rest of the mesh.
