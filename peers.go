@@ -416,7 +416,11 @@ func (peers *Peers) GarbageCollect() {
 
 func (peers *Peers) garbageCollect(pending *peersPendingNotifications) {
 	peers.ourself.RLock()
-	_, reached := peers.ourself.routes(nil, false)
+	singleHopTopology := false
+	if peers.ourself.router != nil {
+		singleHopTopology = peers.ourself.router.Config.SingleHopTopolgy
+	}
+	_, reached := peers.ourself.routes(nil, false, singleHopTopology)
 	peers.ourself.RUnlock()
 
 	for name, peer := range peers.byName {
