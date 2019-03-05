@@ -37,11 +37,11 @@ func TestSurrogateGossiperOnGossip(t *testing.T) {
 	checkOnGossip(t, s, msg[1], msg[1])
 	checkOnGossip(t, s, msg[0], nil)
 	checkOnGossip(t, s, msg[1], nil)
-	myTime = myTime.Add(gossipInterval / 2) // Should not trigger cleardown
-	checkOnGossip(t, s, msg[2], msg[2])     // Only clears out old ones on new entry
+	myTime = myTime.Add(defaultGossipInterval / 2) // Should not trigger cleardown
+	checkOnGossip(t, s, msg[2], msg[2])            // Only clears out old ones on new entry
 	checkOnGossip(t, s, msg[0], nil)
 	checkOnGossip(t, s, msg[1], nil)
-	myTime = myTime.Add(gossipInterval)
+	myTime = myTime.Add(defaultGossipInterval)
 	checkOnGossip(t, s, msg[0], nil)
 	checkOnGossip(t, s, msg[3], msg[3]) // Only clears out old ones on new entry
 	checkOnGossip(t, s, msg[0], msg[0])

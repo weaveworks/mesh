@@ -136,7 +136,14 @@ func (peer *localPeer) encode(enc *gob.Encoder) {
 // ACTOR server
 
 func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
+	var gossipInterval time.Duration
+	if peer.router != nil && peer.router.Config.GossipInterval != nil {
+		gossipInterval = *peer.router.Config.GossipInterval
+	} else {
+		gossipInterval = defaultGossipInterval
+	}
 	gossipTimer := time.Tick(gossipInterval)
+
 	for {
 		select {
 		case action := <-actionChan:

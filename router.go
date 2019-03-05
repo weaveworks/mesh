@@ -18,7 +18,7 @@ var (
 	// throughout mesh.
 	ChannelSize = 16
 
-	gossipInterval = 30 * time.Second
+	defaultGossipInterval = 30 * time.Second
 )
 
 const (
@@ -38,7 +38,7 @@ type Config struct {
 	ProtocolMinVersion byte
 	PeerDiscovery      bool
 	TrustedSubnets     []*net.IPNet
-	gossipInterval     *time.Duration
+	GossipInterval     *time.Duration
 }
 
 // Router manages communication between this peer and the rest of the mesh.
@@ -80,8 +80,8 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	}
 	router.topologyGossip = gossip
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
-	if config.gossipInterval != nil {
-		gossipInterval = *config.gossipInterval
+	if router.Config.GossipInterval == nil {
+		router.Config.GossipInterval = &defaultGossipInterval
 	}
 	return router, nil
 }
@@ -159,7 +159,7 @@ func (router *Router) gossipChannel(channelName string) *gossipChannel {
 	if channel, found = router.gossipChannels[channelName]; found {
 		return channel
 	}
-	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{}, router.logger)
+	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{router: router}, router.logger)
 	channel.logf("created surrogate channel")
 	router.gossipChannels[channelName] = channel
 	return channel
