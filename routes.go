@@ -1,12 +1,18 @@
 package mesh
 
 import (
+	"context"
 	"math"
 	"sync"
+
+	"golang.org/x/time/rate"
 )
 
 type unicastRoutes map[PeerName]PeerName
 type broadcastRoutes map[PeerName][]PeerName
+
+var limiter = rate.NewLimiter(2, 4)
+var pendingCalculate = false
 
 // routes aggregates unicast and broadcast routes for our peer.
 type routes struct {
@@ -191,6 +197,22 @@ func (r *routes) run(recalculate <-chan *struct{}, wait <-chan chan struct{}, ac
 }
 
 func (r *routes) calculate() {
+
+	// rate limit the number of calls to calculate(), also in case
+	// if one or more calls were not allowed, then perform just one
+	// more calculate() to accommodate latest topology updates
+	if limiter.Allow() == false {
+		r.Lock()
+		if pendingCalculate {
+			r.Unlock()
+			return
+		}
+		pendingCalculate = true
+		r.Unlock()
+		limiter.Wait(context.TODO())
+		pendingCalculate = false
+	}
+
 	r.peers.RLock()
 	r.ourself.RLock()
 	var (
