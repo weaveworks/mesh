@@ -80,9 +80,6 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	}
 	router.topologyGossip = gossip
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
-	if router.Config.GossipInterval == nil {
-		router.Config.GossipInterval = &defaultGossipInterval
-	}
 	return router, nil
 }
 
@@ -173,6 +170,14 @@ func (router *Router) gossipChannelSet() map[*gossipChannel]struct{} {
 		channels[channel] = struct{}{}
 	}
 	return channels
+}
+
+func (router *Router) gossipInterval() time.Duration {
+	if router.Config.GossipInterval != nil {
+		return *router.Config.GossipInterval
+	} else {
+		return defaultGossipInterval
+	}
 }
 
 func (router *Router) handleGossip(tag protocolTag, payload []byte) error {
