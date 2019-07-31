@@ -17,11 +17,12 @@ var (
 	// ChannelSize is the buffer size used by so-called actor goroutines
 	// throughout mesh.
 	ChannelSize = 16
+
+	defaultGossipInterval = 30 * time.Second
 )
 
 const (
 	tcpHeartbeat     = 30 * time.Second
-	gossipInterval   = 30 * time.Second
 	maxDuration      = time.Duration(math.MaxInt64)
 	acceptMaxTokens  = 100
 	acceptTokenDelay = 100 * time.Millisecond // [2]
@@ -37,6 +38,7 @@ type Config struct {
 	ProtocolMinVersion byte
 	PeerDiscovery      bool
 	TrustedSubnets     []*net.IPNet
+	GossipInterval     *time.Duration
 }
 
 // Router manages communication between this peer and the rest of the mesh.
@@ -154,7 +156,7 @@ func (router *Router) gossipChannel(channelName string) *gossipChannel {
 	if channel, found = router.gossipChannels[channelName]; found {
 		return channel
 	}
-	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{}, router.logger)
+	channel = newGossipChannel(channelName, router.Ourself, router.Routes, &surrogateGossiper{router: router}, router.logger)
 	channel.logf("created surrogate channel")
 	router.gossipChannels[channelName] = channel
 	return channel
@@ -168,6 +170,14 @@ func (router *Router) gossipChannelSet() map[*gossipChannel]struct{} {
 		channels[channel] = struct{}{}
 	}
 	return channels
+}
+
+func (router *Router) gossipInterval() time.Duration {
+	if router.Config.GossipInterval != nil {
+		return *router.Config.GossipInterval
+	} else {
+		return defaultGossipInterval
+	}
 }
 
 func (router *Router) handleGossip(tag protocolTag, payload []byte) error {
