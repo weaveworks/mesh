@@ -3,6 +3,8 @@ package mesh
 import (
 	"math"
 	"sync"
+
+	"golang.org/x/time/rate"
 )
 
 type unicastRoutes map[PeerName]PeerName
@@ -21,6 +23,7 @@ type routes struct {
 	recalc       chan<- *struct{}
 	wait         chan<- chan struct{}
 	action       chan<- func()
+	limiter      *rate.Limiter
 	// [1] based on *all* connections, not just established &
 	// symmetric ones
 }
@@ -41,6 +44,8 @@ func newRoutes(ourself *localPeer, peers *Peers) *routes {
 		wait:         wait,
 		action:       action,
 	}
+	// rate limiter that permits up to rate 2 and permits bursts of at most 4 tokens
+	r.limiter = rate.NewLimiter(2, 4)
 	go r.run(recalculate, wait, action)
 	return r
 }
@@ -191,6 +196,12 @@ func (r *routes) run(recalculate <-chan *struct{}, wait <-chan chan struct{}, ac
 }
 
 func (r *routes) calculate() {
+
+	// rate limit the number of calls to calculate()
+	if r.limiter.Allow() == false {
+		return
+	}
+
 	r.peers.RLock()
 	r.ourself.RLock()
 	var (
