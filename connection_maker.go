@@ -220,8 +220,37 @@ func (cm *connectionMaker) refresh() {
 }
 
 func (cm *connectionMaker) queryLoop(actionChan <-chan connectionMakerAction) {
-	timer := time.NewTimer(maxDuration)
-	run := func() { timer.Reset(cm.checkStateAndAttemptConnections()) }
+	currentDuration := maxDuration
+	lastRun := time.Time{}
+	timer := time.NewTimer(currentDuration)
+
+	resetTimer := func(d time.Duration) {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+
+		currentDuration = d
+		timer.Reset(currentDuration)
+	}
+
+	run := func() {
+		now := time.Now()
+
+		// If run() was called too recently, we want to ensure that the duration
+		// is no longer than initialInterval
+		if now.Sub(lastRun) < initialInterval {
+			if currentDuration > initialInterval {
+				resetTimer(initialInterval)
+			}
+		} else {
+			// otherwise this means we hit the timer
+			resetTimer(cm.checkStateAndAttemptConnections())
+			lastRun = now
+		}
+	}
 	for {
 		select {
 		case action := <-actionChan:
