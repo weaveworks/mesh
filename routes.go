@@ -19,7 +19,7 @@ type routes struct {
 	broadcast    broadcastRoutes
 	broadcastAll broadcastRoutes // [1]
 	recalc       chan<- *struct{}
-	wait         chan<- chan struct{}
+	wait         chan chan struct{}
 	action       chan<- func()
 	// [1] based on *all* connections, not just established &
 	// symmetric ones
@@ -167,7 +167,13 @@ func (r *routes) recalculate() {
 
 // EnsureRecalculated waits for any preceding Recalculate requests to finish.
 func (r *routes) ensureRecalculated() {
-	done := make(chan struct{})
+	var done chan struct{}
+	// If another call is already waiting, wait on the same chan, otherwise make a new one
+	select {
+	case done = <-r.wait:
+	default:
+		done = make(chan struct{})
+	}
 	r.wait <- done
 	<-done
 }
