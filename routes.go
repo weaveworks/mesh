@@ -207,8 +207,8 @@ func (r *routes) calculate() {
 	r.Lock()
 	r.unicast = unicast
 	r.unicastAll = unicastAll
-	r.broadcast = broadcast
-	r.broadcastAll = broadcastAll
+	r.broadcast[r.ourself.Name] = broadcast[r.ourself.Name]
+	r.broadcastAll[r.ourself.Name] = broadcastAll[r.ourself.Name]
 	onChange := r.onChange
 	r.Unlock()
 
