@@ -13,8 +13,9 @@ import (
 type localPeer struct {
 	sync.RWMutex
 	*Peer
-	router     *Router
-	actionChan chan<- localPeerAction
+	router              *Router
+	actionChan          chan<- localPeerAction
+	topologyUpdatesChan chan<- []*Peer
 }
 
 // The actor closure used by localPeer.
@@ -23,12 +24,15 @@ type localPeerAction func()
 // newLocalPeer returns a usable LocalPeer.
 func newLocalPeer(name PeerName, nickName string, router *Router) *localPeer {
 	actionChan := make(chan localPeerAction, ChannelSize)
+	topologyUpdatesChan := make(chan []*Peer, ChannelSize)
 	peer := &localPeer{
-		Peer:       newPeer(name, nickName, randomPeerUID(), 0, randomPeerShortID()),
-		router:     router,
-		actionChan: actionChan,
+		Peer:                newPeer(name, nickName, randomPeerUID(), 0, randomPeerShortID()),
+		router:              router,
+		actionChan:          actionChan,
+		topologyUpdatesChan: topologyUpdatesChan,
 	}
 	go peer.actorLoop(actionChan)
+	go peer.brodcastTopologyUpdates(topologyUpdatesChan)
 	return peer
 }
 
@@ -151,6 +155,21 @@ func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
 	}
 }
 
+func (peer *localPeer) brodcastTopologyUpdates(topologyUpdatesChan <-chan []*Peer) {
+	for {
+		select {
+		case update := <-topologyUpdatesChan:
+			peer.router.Routes.recalculate()
+			updates := [][]*Peer{update}
+			for i := 0; i < len(topologyUpdatesChan); i++ {
+				u := <-topologyUpdatesChan
+				updates = append(updates, u)
+			}
+			peer.router.broadcastTopologyUpdate(updates...)
+		}
+	}
+}
+
 func (peer *localPeer) handleAddConnection(conn ourConnection, isRestartedPeer bool) error {
 	if peer.Peer != conn.getLocal() {
 		panic("Attempt made to add connection to peer where peer is not the source of connection")
@@ -194,8 +213,6 @@ func (peer *localPeer) handleAddConnection(conn ourConnection, isRestartedPeer b
 		conn.logf("connection added (new peer)")
 		peer.router.sendAllGossipDown(conn)
 	}
-
-	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate(conn.Remote())
 
 	return nil
@@ -211,8 +228,6 @@ func (peer *localPeer) handleConnectionEstablished(conn ourConnection) {
 	}
 	peer.connectionEstablished(conn)
 	conn.logf("connection fully established")
-
-	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
@@ -232,7 +247,6 @@ func (peer *localPeer) handleDeleteConnection(conn ourConnection) {
 	// Must do garbage collection first to ensure we don't send out an
 	// update with unreachable peers (can cause looping)
 	peer.router.Peers.GarbageCollect()
-	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
@@ -244,7 +258,7 @@ func (peer *localPeer) broadcastPeerUpdate(peers ...*Peer) {
 	// context of a test, but that will involve significant
 	// reworking of tests.
 	if peer.router != nil {
-		peer.router.broadcastTopologyUpdate(append(peers, peer.Peer))
+		peer.topologyUpdatesChan <- append(peers, peer.Peer)
 	}
 }
 
