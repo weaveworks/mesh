@@ -232,7 +232,6 @@ func TestGossiperMaker(t *testing.T) {
 	case *gossipChannel:
 		switch s3.(*gossipChannel).gossiper.(type) {
 		case *testGossiper:
-			log.Println("test gossiper created!")
 			g3 = s3.(*gossipChannel).gossiper.(*testGossiper)
 			g3.checkHas(t, 1)
 		default:
