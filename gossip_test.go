@@ -196,6 +196,58 @@ func TestGossipSurrogate(t *testing.T) {
 	g3.checkHas(t, 1, 2)
 }
 
+type testGossiperMaker struct{}
+
+func (t *testGossiperMaker) MakeGossiper(channelName string, router *Router) (Gossiper, error) {
+	return newTestGossiper(), nil
+}
+
+func TestGossiperMaker(t *testing.T) {
+	// create the topology r1 <-> r2 <-> r3
+	r1 := newTestRouter(t, "01:00:00:01:00:00")
+	r2 := newTestRouter(t, "02:00:00:02:00:00")
+	r3 := newTestRouter(t, "03:00:00:03:00:00")
+
+	// auto-create a gossiper at the far end, but not the middle
+	r3.GossiperMaker = &testGossiperMaker{}
+
+	routers := []*Router{r1, r2, r3}
+	addTestGossipConnection(r1, r2)
+	addTestGossipConnection(r3, r2)
+	flushAndCheckTopology(t, routers, r1.tp(r2), r2.tp(r1, r3), r3.tp(r2))
+
+	// create a gossiper at the near end
+	g1 := newTestGossiper()
+	s1, err := r1.NewGossip("Test", g1)
+	require.NoError(t, err)
+
+	// broadcast a message from the near end, check it reaches the far end
+	broadcast(s1, 1)
+	sendPendingGossip(r1, r2, r3)
+
+	// ensure g3 has an auto-created gossip
+	var g3 *testGossiper
+	s3 := r3.GetGossip("Test")
+	switch s3.(type) {
+	case *gossipChannel:
+		switch s3.(*gossipChannel).gossiper.(type) {
+		case *testGossiper:
+			log.Println("test gossiper created!")
+			g3 = s3.(*gossipChannel).gossiper.(*testGossiper)
+			g3.checkHas(t, 1)
+		default:
+			t.Fatal("r3 did not auto-create a testGossiper using GossiperMaker")
+		}
+	default:
+		t.Fatal("r3 did not create a gossipChannel")
+	}
+
+	// send it back and check it reaches the near end
+	broadcast(s3, 2)
+	sendPendingGossip(r1, r2, r3)
+	g1.checkHas(t, 2)
+}
+
 type testGossiper struct {
 	sync.RWMutex
 	state map[byte]struct{}
