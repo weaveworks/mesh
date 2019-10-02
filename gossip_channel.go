@@ -83,6 +83,12 @@ func (c *gossipChannel) GossipBroadcast(update GossipData) {
 	c.relayBroadcast(c.ourself.Name, update)
 }
 
+// GossipRandomNeighbours implements Gossip, relaying update to random members of the
+// channel.
+func (c *gossipChannel) GossipRandomNeighbours(update GossipData) {
+	c.relay(c.ourself.Name, update)
+}
+
 // Send relays data into the channel topology via random neighbours.
 func (c *gossipChannel) Send(data GossipData) {
 	c.relay(c.ourself.Name, data)
