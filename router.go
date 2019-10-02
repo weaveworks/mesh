@@ -241,7 +241,7 @@ func (router *Router) broadcastTopologyUpdate(updates ...[]*Peer) {
 		}
 		gossipData = gossipData.Merge(&topologyGossipData{peers: router.Peers, update: names})
 	}
-	router.topologyGossip.GossipBroadcast(gossipData)
+	router.topologyGossip.GossipRandomNeighbours(gossipData)
 }
 
 // OnGossipUnicast implements Gossiper, but always returns an error, as a
