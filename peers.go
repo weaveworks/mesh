@@ -354,9 +354,6 @@ func (peers *Peers) actorLoop() {
 		select {
 		case <-peers.timer.C:
 			peers.GarbageCollect()
-			// stop the timer so that next scheduled GarbageCollect() will be done
-			// only on receiving topology update
-			peers.timer.Stop()
 			peers.Lock()
 			peers.pendingGC = false
 			peers.Unlock()
