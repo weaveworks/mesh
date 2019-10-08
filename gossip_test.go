@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +67,8 @@ func sendPendingGossip(routers ...*Router) {
 			sentSomething = router.sendPendingGossip() || sentSomething
 		}
 	}
+	// Allow topology to propagate
+	time.Sleep(1 * time.Second)
 }
 
 func addTestGossipConnection(r1, r2 *Router) {
