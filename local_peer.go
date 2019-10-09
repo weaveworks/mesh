@@ -165,7 +165,6 @@ func (peer *localPeer) actorLoop(actionChan <-chan localPeerAction) {
 }
 
 func (peer *localPeer) broadcastPendingTopologyUpdates() {
-	peer.router.Routes.recalculate()
 	peer.Lock()
 	gossipData := peer.topologyUpdates
 	peer.topologyUpdates = make(peerNameSet)
@@ -218,6 +217,7 @@ func (peer *localPeer) handleAddConnection(conn ourConnection, isRestartedPeer b
 		conn.logf("connection added (new peer)")
 		peer.router.sendAllGossipDown(conn)
 	}
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate(conn.Remote())
 
 	return nil
@@ -233,6 +233,8 @@ func (peer *localPeer) handleConnectionEstablished(conn ourConnection) {
 	}
 	peer.connectionEstablished(conn)
 	conn.logf("connection fully established")
+
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
@@ -252,6 +254,7 @@ func (peer *localPeer) handleDeleteConnection(conn ourConnection) {
 	// Must do garbage collection first to ensure we don't send out an
 	// update with unreachable peers (can cause looping)
 	peer.router.Peers.GarbageCollect()
+	peer.router.Routes.recalculate()
 	peer.broadcastPeerUpdate()
 }
 
