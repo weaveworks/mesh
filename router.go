@@ -231,12 +231,9 @@ func (router *Router) sendPendingGossip() bool {
 
 // BroadcastTopologyUpdate is invoked whenever there is a change to the mesh
 // topology, and broadcasts the new set of peers to the mesh.
-func (router *Router) broadcastTopologyUpdate(update []*Peer) {
-	names := make(peerNameSet)
-	for _, p := range update {
-		names[p.Name] = struct{}{}
-	}
-	router.topologyGossip.GossipBroadcast(&topologyGossipData{peers: router.Peers, update: names})
+func (router *Router) broadcastTopologyUpdate(update peerNameSet) {
+	gossipData := &topologyGossipData{peers: router.Peers, update: update}
+	router.topologyGossip.GossipBroadcast(gossipData)
 }
 
 // OnGossipUnicast implements Gossiper, but always returns an error, as a
