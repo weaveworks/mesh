@@ -6,7 +6,6 @@ import (
 	"log"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -67,8 +66,6 @@ func sendPendingGossip(routers ...*Router) {
 			sentSomething = router.sendPendingGossip() || sentSomething
 		}
 	}
-	// Allow topology to propagate
-	time.Sleep(1 * time.Second)
 }
 
 func addTestGossipConnection(r1, r2 *Router) {
@@ -159,6 +156,7 @@ func TestGossipTopology(t *testing.T) {
 	// Drop the connection from 1 to 3
 	r1.DeleteTestGossipConnection(r3)
 	sendPendingGossip(r1, r2, r3)
+	forcePendingGC(r1, r2, r3)
 	checkTopology(t, r1, r1.tp(r2), r2.tp(r1))
 	checkTopology(t, r2, r1.tp(r2), r2.tp(r1))
 	// r3 still thinks r1 has a connection to it
