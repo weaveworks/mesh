@@ -70,7 +70,12 @@ func sendPendingGossip(routers ...*Router) {
 
 func sendPendingTopologyUpdates(routers ...*Router) {
 	for _, router := range routers {
-		router.Ourself.broadcastPendingTopologyUpdates()
+		router.Ourself.Lock()
+		pendingUpdate := router.Ourself.pendingTopologyUpdate
+		router.Ourself.Unlock()
+		if pendingUpdate {
+			router.Ourself.broadcastPendingTopologyUpdates()
+		}
 	}
 }
 
