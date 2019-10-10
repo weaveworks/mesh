@@ -169,6 +169,7 @@ func TestGossipTopology(t *testing.T) {
 	r1.DeleteTestGossipConnection(r3)
 	sendPendingTopologyUpdates(routers...)
 	sendPendingGossip(r1, r2, r3)
+	forcePendingGC(r1, r2, r3)
 	checkTopology(t, r1, r1.tp(r2), r2.tp(r1))
 	checkTopology(t, r2, r1.tp(r2), r2.tp(r1))
 	// r3 still thinks r1 has a connection to it
