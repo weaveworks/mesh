@@ -68,6 +68,17 @@ func sendPendingGossip(routers ...*Router) {
 	}
 }
 
+func sendPendingTopologyUpdates(routers ...*Router) {
+	for _, router := range routers {
+		router.Ourself.Lock()
+		pendingUpdate := router.Ourself.pendingTopologyUpdate
+		router.Ourself.Unlock()
+		if pendingUpdate {
+			router.Ourself.broadcastPendingTopologyUpdates()
+		}
+	}
+}
+
 func addTestGossipConnection(r1, r2 *Router) {
 	c1 := r1.newTestGossipConnection(r2)
 	c2 := r2.newTestGossipConnection(r1)
@@ -121,6 +132,7 @@ func checkTopology(t *testing.T, router *Router, wantedPeers ...*Peer) {
 }
 
 func flushAndCheckTopology(t *testing.T, routers []*Router, wantedPeers ...*Peer) {
+	sendPendingTopologyUpdates(routers...)
 	sendPendingGossip(routers...)
 	for _, r := range routers {
 		checkTopology(t, r, wantedPeers...)
@@ -155,6 +167,7 @@ func TestGossipTopology(t *testing.T) {
 
 	// Drop the connection from 1 to 3
 	r1.DeleteTestGossipConnection(r3)
+	sendPendingTopologyUpdates(routers...)
 	sendPendingGossip(r1, r2, r3)
 	checkTopology(t, r1, r1.tp(r2), r2.tp(r1))
 	checkTopology(t, r2, r1.tp(r2), r2.tp(r1))
