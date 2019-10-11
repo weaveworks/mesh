@@ -1,0 +1,17 @@
+version: 2.1
+
+jobs:
+  build:
+    docker:
+      - image: golang:1.13.1-stretch
+    working_directory: /go/src/github.com/weaveworks/mesh
+    steps:
+    - checkout
+    - run:
+        name: Lint
+        command: |
+          ./lint
+    - run:
+        name: Test
+        command: |
+          go test -v
