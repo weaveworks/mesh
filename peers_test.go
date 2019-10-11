@@ -31,7 +31,8 @@ func checkApplyUpdate(t *testing.T, peers *Peers) {
 	// into it.
 	_, testBedPeers := newNode(dummyName)
 	testBedPeers.AddTestConnection(peers.ourself.Peer)
-	testBedPeers.applyUpdate(peers.encodePeers(peers.names()))
+	_, _, err := testBedPeers.applyUpdate(peers.encodePeers(peers.names()))
+	require.NoError(t, err)
 
 	checkTopologyPeers(t, true, testBedPeers.allPeersExcept(dummyName), peers.allPeers()...)
 }
@@ -296,13 +297,15 @@ func TestShortIDPropagation(t *testing.T) {
 	_, peers2 := newNode(PeerName(2))
 
 	peers1.AddTestConnection(peers2.ourself.Peer)
-	peers1.applyUpdate(peers2.encodePeers(peers2.names()))
+	_, _, err := peers1.applyUpdate(peers2.encodePeers(peers2.names()))
+	require.NoError(t, err)
 	peers12 := peers1.Fetch(PeerName(2))
 	old := peers12.peerSummary
 
 	require.True(t,
 		peers2.reassignLocalShortID(&peersPendingNotifications{}))
-	peers1.applyUpdate(peers2.encodePeers(peers2.names()))
+	_, _, err = peers1.applyUpdate(peers2.encodePeers(peers2.names()))
+	require.NoError(t, err)
 	require.NotEqual(t, old.Version, peers12.Version)
 	require.NotEqual(t, old.ShortID, peers12.ShortID)
 }
@@ -322,15 +325,18 @@ func TestShortIDCollision(t *testing.T) {
 	peers3.AddTestConnection(peers2.ourself.Peer)
 
 	// Propogate from 1 to 2 to 3
-	peers2.applyUpdate(peers1.encodePeers(peers1.names()))
-	peers3.applyUpdate(peers2.encodePeers(peers2.names()))
+	_, _, err := peers2.applyUpdate(peers1.encodePeers(peers1.names()))
+	require.NoError(t, err)
+	_, _, err = peers3.applyUpdate(peers2.encodePeers(peers2.names()))
+	require.NoError(t, err)
 
 	// Force the short id of peer 1 to collide with peer 2.  Peer
 	// 1 has the lowest name, so it gets to keep the short id
 	peers1.setLocalShortID(2, &pending)
 
 	oldShortID := peers2.ourself.ShortID
-	_, updated, _ := peers2.applyUpdate(peers1.encodePeers(peers1.names()))
+	_, updated, err := peers2.applyUpdate(peers1.encodePeers(peers1.names()))
+	require.NoError(t, err)
 
 	// peer 2 should have noticed the collision and resolved it
 	require.NotEqual(t, oldShortID, peers2.ourself.ShortID)
@@ -341,7 +347,8 @@ func TestShortIDCollision(t *testing.T) {
 	updated[PeerName(2)] = struct{}{}
 
 	// the update from peer 2 should include its short id change
-	peers3.applyUpdate(peers2.encodePeers(updated))
+	_, _, err = peers3.applyUpdate(peers2.encodePeers(updated))
+	require.NoError(t, err)
 	require.Equal(t, peers2.ourself.ShortID,
 		peers3.Fetch(PeerName(2)).ShortID)
 }
