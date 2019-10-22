@@ -43,7 +43,7 @@ type Config struct {
 
 // GossiperMaker is an interface to create a Gossiper instance
 type GossiperMaker interface {
-	MakeGossiper(channelName string, router *Router) (Gossiper, error)
+	MakeGossiper(channelName string, router *Router) Gossiper
 }
 
 // Router manages communication between this peer and the rest of the mesh.
@@ -173,15 +173,8 @@ func (router *Router) gossipChannel(channelName string) *gossipChannel {
 	var gossiper Gossiper
 	if router.GossiperMaker != nil {
 		// use the GossiperMaker to make the surrogate channel
-		g, err := router.GossiperMaker.MakeGossiper(channelName, router)
-		if err != nil {
-			router.logger.Printf("unable to create gossiper, falling back to surrogateGossiper: %s", err.Error())
-		} else {
-			router.logger.Printf("created custom surrogate gossiper")
-			gossiper = g
-		}
-	}
-	if gossiper == nil {
+		gossiper = router.GossiperMaker.MakeGossiper(channelName, router)
+	} else {
 		// default surrogate channel
 		gossiper = &surrogateGossiper{router: router}
 	}

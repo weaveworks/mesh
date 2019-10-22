@@ -198,8 +198,8 @@ func TestGossipSurrogate(t *testing.T) {
 
 type testGossiperMaker struct{}
 
-func (t *testGossiperMaker) MakeGossiper(channelName string, router *Router) (Gossiper, error) {
-	return newTestGossiper(), nil
+func (t *testGossiperMaker) MakeGossiper(channelName string, router *Router) Gossiper {
+	return newTestGossiper()
 }
 
 func TestGossiperMaker(t *testing.T) {
