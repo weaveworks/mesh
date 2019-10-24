@@ -83,9 +83,9 @@ func (c *gossipChannel) GossipBroadcast(update GossipData) {
 	c.relayBroadcast(c.ourself.Name, update)
 }
 
-// GossipRandomNeighbours implements Gossip, relaying update to random members of the
+// GossipNeighbourSubset implements Gossip, relaying update to subset of members of the
 // channel.
-func (c *gossipChannel) GossipRandomNeighbours(update GossipData) {
+func (c *gossipChannel) GossipNeighbourSubset(update GossipData) {
 	c.relay(c.ourself.Name, update)
 }
 
