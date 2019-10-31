@@ -79,14 +79,14 @@ func sendPendingTopologyUpdates(routers ...*Router) {
 	}
 }
 
-func addTestGossipConnection(r1, r2 *Router) {
-	c1 := r1.newTestGossipConnection(r2)
-	c2 := r2.newTestGossipConnection(r1)
+func addTestGossipConnection(t require.TestingT, r1, r2 *Router) {
+	c1 := r1.newTestGossipConnection(t, r2)
+	c2 := r2.newTestGossipConnection(t, r1)
 	c1.Start()
 	c2.Start()
 }
 
-func (router *Router) newTestGossipConnection(r *Router) *mockGossipConnection {
+func (router *Router) newTestGossipConnection(t require.TestingT, r *Router) *mockGossipConnection {
 	to := r.Ourself.Peer
 	toPeer := newPeer(to.Name, to.NickName, to.UID, 0, to.ShortID)
 	toPeer = router.Peers.fetchWithDefault(toPeer) // Has side-effect of incrementing refcount
@@ -97,7 +97,7 @@ func (router *Router) newTestGossipConnection(r *Router) *mockGossipConnection {
 		start:            make(chan struct{}),
 	}
 	conn.senders = newGossipSenders(conn, make(chan struct{}))
-	router.Ourself.handleAddConnection(conn, false)
+	require.NoError(t, router.Ourself.handleAddConnection(conn, false))
 	router.Ourself.handleConnectionEstablished(conn)
 	return conn
 }
@@ -150,15 +150,15 @@ func TestGossipTopology(t *testing.T) {
 	checkTopology(t, r2, r2.tp())
 
 	// Now try adding some connections
-	addTestGossipConnection(r1, r2)
+	addTestGossipConnection(t, r1, r2)
 	sendPendingGossip(r1, r2)
 	checkTopology(t, r1, r1.tp(r2), r2.tp(r1))
 	checkTopology(t, r2, r1.tp(r2), r2.tp(r1))
 
-	addTestGossipConnection(r2, r3)
+	addTestGossipConnection(t, r2, r3)
 	flushAndCheckTopology(t, routers, r1.tp(r2), r2.tp(r1, r3), r3.tp(r2))
 
-	addTestGossipConnection(r3, r1)
+	addTestGossipConnection(t, r3, r1)
 	flushAndCheckTopology(t, routers, r1.tp(r2, r3), r2.tp(r1, r3), r3.tp(r1, r2))
 
 	// Drop the connection from 2 to 3
@@ -182,8 +182,8 @@ func TestGossipSurrogate(t *testing.T) {
 	r2 := newTestRouter(t, "02:00:00:02:00:00")
 	r3 := newTestRouter(t, "03:00:00:03:00:00")
 	routers := []*Router{r1, r2, r3}
-	addTestGossipConnection(r1, r2)
-	addTestGossipConnection(r3, r2)
+	addTestGossipConnection(t, r1, r2)
+	addTestGossipConnection(t, r3, r2)
 	flushAndCheckTopology(t, routers, r1.tp(r2), r2.tp(r1, r3), r3.tp(r2))
 
 	// create a gossiper at either end, but not the middle
