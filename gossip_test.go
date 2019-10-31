@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"sync"
 	"testing"
 
@@ -270,4 +271,41 @@ func (g *testGossiper) checkHas(t *testing.T, vs ...byte) {
 
 func broadcast(s Gossip, v byte) {
 	s.GossipBroadcast(newSurrogateGossipData([]byte{v}))
+}
+
+func TestRandomNeighbours(t *testing.T) {
+	const nTrials = 5000
+	ourself := PeerName(0) // aliased with UnknownPeerName, which is ok here
+	// Check fairness of selection across different-sized sets
+	for _, test := range []struct{ nPeers, nNeighbours int }{{1, 0}, {2, 1}, {3, 2}, {10, 2}, {10, 3}, {10, 9}, {100, 2}, {100, 99}} {
+		t.Run(fmt.Sprint(test.nPeers, "_peers_", test.nNeighbours, "_neighbours"), func(t *testing.T) {
+			// Create a test fixture with unicastAll set up
+			r := routes{
+				unicastAll: make(unicastRoutes, test.nPeers),
+			}
+			// The route to 'ourself' is always via 'unknown'
+			r.unicastAll[ourself] = UnknownPeerName
+			// Fully-connected: unicast route to X is via X
+			for i := 1; i < test.nPeers; i++ {
+				r.unicastAll[PeerName(i)] = PeerName(i%test.nNeighbours + 1)
+			}
+			total := 0
+			counts := make([]int, test.nNeighbours+1)
+			// Run randomNeighbours() several times, and count the distribution
+			for trial := 0; trial < nTrials; trial++ {
+				targets := r.randomNeighbours(ourself)
+				expected := int(math.Min(math.Log2(float64(test.nPeers)), float64(test.nNeighbours)))
+				require.Equal(t, expected, len(targets))
+				total += len(targets)
+				for _, p := range targets {
+					counts[p]++
+				}
+			}
+			require.Equal(t, 0, counts[ourself], "randomNeighbours should not select source peer")
+			// Check that each neighbour was picked within 20% of an average count
+			for i := 1; i < test.nNeighbours+1; i++ {
+				require.InEpsilon(t, float64(total)/float64(test.nNeighbours), counts[i], 0.2, "peer %d picked %d times out of %d; counts %v", i, counts[i], total, counts)
+			}
+		})
+	}
 }
