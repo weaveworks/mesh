@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -140,24 +141,34 @@ func (r *routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoutes, es
 // neighbours than elsewhere. In extremis, on peers with fewer than
 // log2(n_peers) neighbours, all neighbours are returned.
 func (r *routes) randomNeighbours(except PeerName) []PeerName {
-	destinations := make(peerNameSet)
 	r.RLock()
 	defer r.RUnlock()
-	count := int(math.Log2(float64(len(r.unicastAll))))
-	// depends on go's random map iteration
+	var total int64 = 0
+	weights := make(map[PeerName]int64)
+	// First iterate the whole set, counting how often each neighbour appears
 	for _, dst := range r.unicastAll {
 		if dst != UnknownPeerName && dst != except {
-			destinations[dst] = struct{}{}
-			if len(destinations) >= count {
-				break
-			}
+			total++
+			weights[dst]++
 		}
 	}
-	res := make([]PeerName, 0, len(destinations))
-	for dst := range destinations {
-		res = append(res, dst)
+	needed := int(math.Min(math.Log2(float64(len(r.unicastAll))), float64(len(weights))))
+	destinations := make([]PeerName, 0, needed)
+	for len(destinations) < needed {
+		// Pick a random point on the distribution and linear search for it
+		rnd := rand.Int63n(total)
+		for dst, count := range weights {
+			if rnd < count {
+				destinations = append(destinations, dst)
+				// Remove the one we selected from consideration
+				delete(weights, dst)
+				total -= count
+				break
+			}
+			rnd -= count
+		}
 	}
-	return res
+	return destinations
 }
 
 // Recalculate requests recalculation of the routing table. This is async but
