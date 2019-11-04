@@ -294,7 +294,7 @@ func TestRandomNeighbours(t *testing.T) {
 			// Run randomNeighbours() several times, and count the distribution
 			for trial := 0; trial < nTrials; trial++ {
 				targets := r.randomNeighbours(ourself)
-				expected := int(math.Min(math.Log2(float64(test.nPeers)), float64(test.nNeighbours)))
+				expected := int(math.Min(2*math.Log2(float64(test.nPeers)), float64(test.nNeighbours)))
 				require.Equal(t, expected, len(targets))
 				total += len(targets)
 				for _, p := range targets {
