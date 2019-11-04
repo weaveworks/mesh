@@ -136,7 +136,7 @@ func (r *routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoutes, es
 // proportion of peers via that neighbour than other neighbours - then it is
 // chosen with a higher probability.
 //
-// Note that we choose log2(n_peers) *neighbours*, not peers. Consequently, on
+// Note that we choose 2log2(n_peers) *neighbours*, not peers. Consequently, on
 // sparsely connected peers this function returns a higher proportion of
 // neighbours than elsewhere. In extremis, on peers with fewer than
 // log2(n_peers) neighbours, all neighbours are returned.
