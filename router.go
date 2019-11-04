@@ -24,8 +24,8 @@ var (
 const (
 	tcpHeartbeat     = 30 * time.Second
 	maxDuration      = time.Duration(math.MaxInt64)
-	acceptMaxTokens  = 100
-	acceptTokenDelay = 100 * time.Millisecond // [2]
+	acceptMaxTokens  = 20
+	acceptTokenDelay = 50 * time.Millisecond
 )
 
 // Config defines dimensions of configuration for the router.
