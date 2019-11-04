@@ -233,7 +233,7 @@ func (router *Router) sendPendingGossip() bool {
 // topology, and broadcasts the new set of peers to the mesh.
 func (router *Router) broadcastTopologyUpdate(update peerNameSet) {
 	gossipData := &topologyGossipData{peers: router.Peers, update: update}
-	router.topologyGossip.GossipBroadcast(gossipData)
+	router.topologyGossip.GossipNeighbourSubset(gossipData)
 }
 
 // OnGossipUnicast implements Gossiper, but always returns an error, as a
