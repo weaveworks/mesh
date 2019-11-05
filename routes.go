@@ -128,7 +128,7 @@ func (r *routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoutes, es
 	return <-res
 }
 
-// RandomNeighbours chooses min(log2(n_peers), n_neighbouring_peers)
+// RandomNeighbours chooses min(2 log2(n_peers), n_neighbouring_peers)
 // neighbours, with a random distribution that is topology-sensitive,
 // favouring neighbours at the end of "bottleneck links". We determine the
 // latter based on the unicast routing table. If a neighbour appears as the
@@ -136,7 +136,7 @@ func (r *routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoutes, es
 // proportion of peers via that neighbour than other neighbours - then it is
 // chosen with a higher probability.
 //
-// Note that we choose log2(n_peers) *neighbours*, not peers. Consequently, on
+// Note that we choose 2log2(n_peers) *neighbours*, not peers. Consequently, on
 // sparsely connected peers this function returns a higher proportion of
 // neighbours than elsewhere. In extremis, on peers with fewer than
 // log2(n_peers) neighbours, all neighbours are returned.
@@ -152,7 +152,7 @@ func (r *routes) randomNeighbours(except PeerName) []PeerName {
 			weights[dst]++
 		}
 	}
-	needed := int(math.Min(math.Log2(float64(len(r.unicastAll))), float64(len(weights))))
+	needed := int(math.Min(2*math.Log2(float64(len(r.unicastAll))), float64(len(weights))))
 	destinations := make([]PeerName, 0, needed)
 	for len(destinations) < needed {
 		// Pick a random point on the distribution and linear search for it
