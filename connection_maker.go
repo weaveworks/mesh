@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"strconv"
 	"time"
 	"unicode"
 )
@@ -93,7 +94,7 @@ func (cm *connectionMaker) InitiateConnections(peers []string, replace bool) []e
 		}
 		if host == "" || !isAlnum(port) {
 			errors = append(errors, fmt.Errorf("invalid peer name %q, should be host[:port]", peer))
-		} else if addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%s", host, port)); err != nil {
+		} else if addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(host, port)); err != nil {
 			errors = append(errors, err)
 		} else {
 			addrs[peer] = addr
@@ -331,7 +332,7 @@ func (cm *connectionMaker) addPeerTargets(ourConnectedPeers peerNameSet, addTarg
 				// ephemeral) remote port of an inbound connection
 				// that some peer has. Let's try to connect on the
 				// weave port instead.
-				addTarget(fmt.Sprintf("%s:%d", ip, cm.port))
+				addTarget(net.JoinHostPort(ip, strconv.Itoa(cm.port)))
 			}
 		}
 	})
