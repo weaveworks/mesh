@@ -195,6 +195,11 @@ func (cm *connectionMaker) connectionTerminated(conn Connection, err error) {
 		}
 		delete(cm.connections, conn)
 		if conn.isOutbound() {
+			if conn.Remote() != nil {
+				if _, ok := cm.ourself.Peer.connections[conn.Remote().Name]; ok {
+					return true
+				}
+			}
 			target := cm.targets[conn.remoteTCPAddress()]
 			target.state = targetWaiting
 			target.lastError = err
